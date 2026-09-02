@@ -47,7 +47,7 @@ cd examples/typescript && bun install
 ## Run everything
 
 ```bash
-# Solidity: 57 tests, forked against the live chain, executing real swaps and LP flows.
+# Solidity: 58 tests, forked against the live chain, executing real swaps and LP flows.
 # Point BTR_RPC_URL at your own endpoint: the suite forks from the config's `rpcUrl`, so
 # `forge test --fork-url ...` does NOT change where it reads from.
 cd foundry && forge test -vv
@@ -87,10 +87,16 @@ See [`.env.example`](.env.example).
 | `BTR_RPC_URL` | the config's `rpcUrl` | Endpoint to use, or to fork |
 | `BTR_PRIVATE_KEY` | unset | Set to SEND transactions. Unset means dry run |
 | `BTR_FORK_BLOCK` | `0` (latest) | Foundry only: pin the fork for reproducible numbers |
+| `ANVIL_PORT` | `8545` | TypeScript fork suite: port for the anvil it boots |
+| `ANVIL_CUPS` | `100` | anvil's outbound throttle, sized for a free endpoint |
 
 A pinned block is the reproducible mode: marks, inventories and therefore every quote are frozen.
 Latest is the liveness mode: it proves the deployment is answering now. Both are supported because
 they check different things.
+
+`bun run test:fork` REFUSES a port that is already answering rather than testing against whatever
+is on it. A forgotten anvil serves the contract implementations as they were when it forked, so a
+day-old one turns every upgrade into a phantom contract bug. Stop it, or set `ANVIL_PORT`.
 
 Public endpoints rate limit. A 429 is an UNKNOWN result, never a pass and never a failure: the
 TypeScript examples retry it with backoff (`withRetry` in [`src/config.ts`](typescript/src/config.ts)),
@@ -125,7 +131,11 @@ tuple and the nested `Part[]`/`Hop[]` encoding are yours to get right.
    by the coverage haircut. Freshly minted shares are also frozen for `flowCooldownSecs`, which is
    why `maxRedeem` is zero right after a deposit.
 5. **A debt swap is denominated in LP SHARES on both sides**, and shares are not comparable across
-   legs: each leg carries its own liquidity index. Compare VALUE through `previewWithdraw`.
+   legs: each leg carries its own liquidity index. Compare VALUE through `previewWithdraw`. The
+   same `flowCooldownSecs` freeze applies, because `swapLiability` moves an LP claim just as a
+   withdraw does: deposit and re-denominate in one block and the call reverts `CooldownActive()`.
+   And the carry is not par between two stables. What arrives is marked to the DESTINATION leg's
+   coverage, so joining an under-covered leg costs you its shortfall.
 6. **Decimals are not 18.** EURC is 6. `SwapQuote.markPrice` is a WHOLE-UNIT price, so a raw
    `amountOut / amountIn` ratio only matches it when both legs share a decimal count. On the
    USDCB/EURC leg the raw ratio is out by 1e12, and nothing reverts: it reads as a 99.9999% price
@@ -136,22 +146,6 @@ tuple and the nested `Part[]`/`Hop[]` encoding are yours to get right.
    03:00 UTC on a Sunday is the system working; a stale WETH, EURC or JPYC feed never is. The
    oracle examples return `live` / `closed` / `incident` rather than a boolean, and the tests that
    need an open market SKIP loudly with the reason instead of failing every weekend.
-
-## Known issues
-
-**`Pool.swapLiability` and cross-asset `Pool.withdrawTo` revert `ZeroValue()` on the Arc testnet
-deployment**, for every pair, on every pool, at every size. `Pool.swap`, `deposit` and same-asset
-`withdraw` are unaffected.
-
-The cause is a linked-library mismatch in the deployment, not in the calls: `Pool` is linked
-against one build of the pricing library while `PoolLiquidity` is linked against an older one, so
-every `PoolLiquidity` path that quotes reaches a stale library. Both LP paths that quote fail;
-neither of the paths that does not quote does.
-
-Example 6 is written and reviewed against the real ABI, and its static assertions (the risk-flag
-gate, the same-leg and unlisted-leg rejections, the deadline guard) pass. Its execution assertions
-SKIP, loudly, with the reason logged, and turn back into real assertions the moment the chain
-answers, with no edit to the examples. They are not deleted and not weakened to assert nothing.
 
 ## License
 

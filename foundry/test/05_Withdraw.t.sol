@@ -25,13 +25,8 @@ import {IERC20, IPool} from "../src/interfaces/IBTR.sol";
  * Run: forge test --match-path 'test/05_*' -vv
  */
 contract WithdrawTest is BTRForkTest {
-  /// @dev Seconds to wait out the anti-JIT cooldown. Read from the pool, not hardcoded.
-  function cooldownOf(IPool p) internal view returns (uint256) {
-    (bool ok, bytes memory ret) =
-      address(p).staticcall(abi.encodeWithSignature("flowCooldownSecs()"));
-    return ok ? abi.decode(ret, (uint16)) : 0;
-  }
-
+  /// @dev Seconds to wait out the anti-JIT cooldown on the stable pool. `cooldownOf` lives in
+  ///      `BTRForkTest` because example 6 needs the same value for the same reason.
   function cooldown() internal view returns (uint256) {
     return cooldownOf(stablePool);
   }

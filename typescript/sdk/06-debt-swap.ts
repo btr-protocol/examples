@@ -17,9 +17,14 @@
  * Consequences you have to encode for:
  *   - both legs need `LIABILITY_SWAP_ENABLED_BIT` (bit 2) in `getRiskFlags`
  *   - an UNDER-COVERED input leg takes a haircut, so leaving it does not dump the shortfall on
- *     whoever stays
+ *     whoever stays; symmetrically, an UNDER-COVERED destination leg marks the arriving
+ *     claim down to its coverage, so joining one is not free either
  *   - BOTH amounts are in LP SHARES, not token units. `minLpAmountOut` is a SHARE floor. Passing
  *     a token amount there is a units bug no passing test will catch.
+ *   - THE FLOW COOLDOWN APPLIES. A debt swap moves an LP claim, so it is gated by the same
+ *     anti-flow-abuse freeze as a withdraw: shares minted less than `flowCooldownSecs` ago cannot
+ *     be re-denominated and the call reverts `CooldownActive()`. Deposit and swap in one block
+ *     does not work. Read the window off the pool, it is an admin-settable `uint16`.
  *
  * Run: bun run sdk/06-debt-swap.ts
  */
@@ -29,6 +34,7 @@ import { LIABILITY_SWAP_ENABLED_BIT, liabilitySwapEnabled } from '@btr-protocol/
 import { deadline, fmt, pool, token, withRetry, type Address } from '../src/config.ts';
 import { account, armed, call, provider, send } from '../src/sdk-wallet.ts';
 import { lpBalance } from './04-deposit.ts';
+import { flowCooldownSecs } from './05-withdraw.ts';
 
 export const riskFlags = (p: Address, tk: Address) =>
   withRetry(() => readContract<bigint>(provider, p, POOL_ABI, 'getRiskFlags', [tk])).then(Number);
@@ -79,6 +85,7 @@ if (import.meta.main) {
   await assertLegsEnabled(p, from, to);
   console.log(`pool        ${p}`);
   console.log(`legs        USDT -> USDS, both liability-swap enabled`);
+  console.log(`cooldown    ${await flowCooldownSecs(p)}s   (shares minted inside it cannot be re-denominated)`);
 
   const shares = await lpBalance(p, user, from);
   console.log(`lp balance  ${fmt(shares)} USDT shares`);
@@ -93,7 +100,8 @@ if (import.meta.main) {
   } catch (e) {
     // Fail loudly. A debt swap that cannot even be simulated must not be sent with a zero floor.
     console.error(`simulation reverted: ${(e as Error).message}`);
-    console.error('See the repository README, "Known issues", before assuming this is your bug.');
+    console.error('`CooldownActive()` (0xaa9a98df) means the shares are still inside the flow');
+    console.error('cooldown printed above. Anything else: check the risk flags on both legs.');
     process.exit(1);
   }
 

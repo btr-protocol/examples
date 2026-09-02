@@ -117,6 +117,24 @@ abstract contract BTRForkTest is Test {
       / (amountIn * (10 ** uint256(IERC20(tokenOut).decimals())));
   }
 
+  /// @dev The pool's anti-flow-abuse window, seconds. READ FROM THE CONTRACT, never hardcoded:
+  ///      it is an admin-settable `uint16`, so a literal is a latent break the day it is retuned.
+  function cooldownOf(IPool p) internal view returns (uint256) {
+    return p.flowCooldownSecs();
+  }
+
+  /// @dev Move the clock past the pool's flow cooldown.
+  ///
+  ///      Freshly minted LP shares are frozen for `flowCooldownSecs`, and the freeze gates BOTH
+  ///      `withdraw` AND `swapLiability`: either one in the same block as the deposit reverts
+  ///      `CooldownActive()`. That is the guard that stops a deposit-flip-exit sandwich from
+  ///      harvesting an index or coverage move it never carried any risk for. An integrator
+  ///      cannot opt out of it, so an example that quietly deposited and swapped in one block
+  ///      would be teaching a call that reverts on the real chain.
+  function warpPastCooldown(IPool p) internal {
+    vm.warp(block.timestamp + cooldownOf(p) + 1);
+  }
+
   /// @dev |a - b| in bps of `b`.
   function diffBps(uint256 a, uint256 b) internal pure returns (uint256) {
     return (a > b ? a - b : b - a) * 10_000 / b;

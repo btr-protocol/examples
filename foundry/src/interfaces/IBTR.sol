@@ -125,6 +125,14 @@ interface IPool {
   /// @return haircut  The haircut applied, same units as `amount`.
   function previewWithdraw(address tk, uint256 lp) external view returns (uint256 amount, uint256 haircut);
 
+  /// @dev Raised when an LP claim is moved inside the flow cooldown window.
+  error CooldownActive();
+
+  /// @notice Seconds a freshly minted LP share stays frozen. Admin-settable, so READ it.
+  /// @dev It gates BOTH `withdraw` and `swapLiability`: either one inside the window reverts
+  ///      `CooldownActive()`. See `BTRForkTest.warpPastCooldown`.
+  function flowCooldownSecs() external view returns (uint16);
+
   function getLPBalance(address user, address tk) external view returns (uint256);
   function lpToken(address tk) external view returns (address);
   function maxRedeem(address owner, address tk) external view returns (uint256);

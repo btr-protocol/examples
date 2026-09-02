@@ -138,15 +138,12 @@ describe('example 6: debt swap (swapLiability)', () => {
     await send(sdkDep.depositCalls(stable, USDT, TEN_K));
     const shares = await sdkDep.lpBalance(stable, me, USDT);
 
-    let quoted: bigint;
-    try {
-      quoted = await sdkDebt.simulateShareOut(stable, USDT, USDS, shares, me);
-    } catch (e) {
-      // See README, "Known issues": swapLiability reverts ZeroValue() on the deployment these
-      // examples were written against. Reported rather than asserted away.
-      console.log(`    SKIPPED: swapLiability is not executable on this chain (${(e as Error).message.split('\n')[0]})`);
-      return;
-    }
+    // A debt swap moves an LP claim, so the anti-flow-abuse freeze gates it exactly as it gates a
+    // withdraw: shares minted less than `flowCooldownSecs` ago revert `CooldownActive()`. Wait it
+    // out, and read the window off the pool rather than hardcoding it.
+    await warp(Number(await rpcWd.flowCooldownSecs(stable)) + 1);
+
+    const quoted = await sdkDebt.simulateShareOut(stable, USDT, USDS, shares, me);
 
     const poolUsdtBefore = await balanceOf(USDT, stable);
     const poolUsdsBefore = await balanceOf(USDS, stable);
@@ -162,27 +159,33 @@ describe('example 6: debt swap (swapLiability)', () => {
     expect(await balanceOf(USDT, me)).toBe(myUsdtBefore);
   }, 120_000);
 
-  test('vanilla path: value is preserved even though share counts differ', async () => {
+  test('vanilla path: the carry is marked to the destination leg coverage', async () => {
     await deal(USDT, me, TEN_K * 2n);
     await send(rpcDep.depositCalls(stable, USDT, TEN_K));
     const shares = await rpcDep.lpBalance(stable, me, USDT);
+    await warp(Number(await rpcWd.flowCooldownSecs(stable)) + 1);
 
-    let quoted: bigint;
-    try {
-      quoted = await rpcDebt.simulateShareOut(stable, USDT, USDS, shares, me);
-    } catch (e) {
-      console.log(`    SKIPPED: swapLiability is not executable on this chain (${(e as Error).message.split('\n')[0]})`);
-      return;
-    }
+    const quoted = await rpcDebt.simulateShareOut(stable, USDT, USDS, shares, me);
 
     const [valueIn] = await rpcWd.previewWithdraw(stable, USDT, shares);
+    const covOut = await rpcDep.coverage(stable, USDS);
     await send([rpcDebt.debtSwapCall(stable, USDT, USDS, shares, (quoted * 999n) / 1000n)]);
     const outShares = await rpcDep.lpBalance(stable, me, USDS);
-    const [valueOut] = await rpcWd.previewWithdraw(stable, USDS, outShares);
+    const [valueOut, haircutOut] = await rpcWd.previewWithdraw(stable, USDS, outShares);
 
     expect(valueOut).toBeLessThanOrEqual(valueIn + 1n); // a debt swap must never mint value
-    const drift = valueIn > valueOut ? valueIn - valueOut : valueOut - valueIn;
-    expect(Number((drift * 10_000n) / valueIn)).toBeLessThan(200);
+
+    // What crosses is marked to the DESTINATION leg's coverage: joining an under-covered leg at
+    // par would be arbing the shortfall at the expense of whoever is already in it. So the carry
+    // is not par between two stables, and the expected number is derived from `getCoverageRatio`
+    // at call time rather than hardcoded. Adding the haircut back isolates the claim from the
+    // coverage move this swap itself caused.
+    const WAD = 10n ** 18n;
+    const claimOut = valueOut + haircutOut;
+    const expected = (valueIn * (covOut < WAD ? covOut : WAD)) / WAD;
+    const drift = expected > claimOut ? expected - claimOut : claimOut - expected;
+    expect(Number((drift * 10_000n) / expected)).toBeLessThan(200);
+    console.log(`    claim ${fmt(claimOut)} vs coverage-implied ${fmt(expected)}`);
   }, 120_000);
 });
 

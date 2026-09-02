@@ -34,6 +34,11 @@ export const previewWithdraw = (p: Address, tk: Address, lp: bigint) =>
 export const maxRedeem = (p: Address, user: Address, tk: Address) =>
   withRetry(() => readContract<bigint>(provider, p, POOL_ABI, 'maxRedeem', [user, tk]));
 
+/** The anti-JIT window, seconds. Admin-settable, so READ it rather than pinning a literal. It
+ *  gates `swapLiability` as well as `withdraw`: both move an LP claim. */
+export const flowCooldownSecs = (p: Address) =>
+  withRetry(() => readContract<bigint>(provider, p, POOL_ABI, 'flowCooldownSecs', []));
+
 export async function withdrawCall(p: Address, tk: Address, lp: bigint, slippageBps: number) {
   const [amountOut, haircut] = await previewWithdraw(p, tk, lp);
   if (amountOut === 0n) throw new Error('preview returned zero: that is a failure, not a valuation');

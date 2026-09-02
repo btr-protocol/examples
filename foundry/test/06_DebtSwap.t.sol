@@ -20,46 +20,36 @@ import {IERC20, IPool} from "../src/interfaces/IBTR.sol";
  *
  *   - both legs need `LIABILITY_SWAP_ENABLED_BIT` (bit 2) in `getRiskFlags`
  *   - an UNDER-COVERED input leg takes a haircut, because leaving a leg that cannot pay everyone
- *     in full at face value would hand the shortfall to whoever stays
+ *     in full at face value would hand the shortfall to whoever stays; symmetrically, an
+ *     UNDER-COVERED destination leg marks the arriving claim down to its coverage, because
+ *     joining a weak leg at par would be arbing the gap at the expense of whoever is in it
  *   - the amounts are in LP SHARES on both sides, not in token units. `minLpAmountOut` is a share
  *     floor. Passing a token amount there is a units bug that a passing test will not catch.
+ *   - THE FLOW COOLDOWN APPLIES. A debt swap moves an LP claim, so it is gated by the same
+ *     anti-flow-abuse freeze as a withdraw: shares minted less than `Pool.flowCooldownSecs()` ago
+ *     cannot be re-denominated, and trying reverts `CooldownActive()`. Deposit-then-swap in one
+ *     block does not work on the real chain, so it does not work here either. Every test below
+ *     reads the window off the pool and waits it out.
  *
  * Run: forge test --match-path 'test/06_*' -vv
  */
 contract DebtSwapTest is BTRForkTest {
   uint16 constant LIABILITY_SWAP_ENABLED_BIT = 1 << 2;
 
-  /// `Errors.ZeroValue()`. See `_requireDebtSwapLive`.
-  bytes4 constant ZERO_VALUE = 0x7c946ed7;
-
-  /// @notice Probe the chain before asserting anything about a fill.
+  /// @dev Deposit USDT and hand back shares that are actually swappable.
   ///
-  /// On the deployment this example set was written against, EVERY `swapLiability` call reverts
-  /// `ZeroValue()`, for every pair, on every pool, at every size, and so does cross-asset
-  /// `withdrawTo`. Same-asset `withdraw` and `Pool.swap` are unaffected. That is an environment
-  /// fault, not an example fault, and it is reported rather than papered over: these tests SKIP,
-  /// loudly, instead of being deleted or quietly weakened to assert nothing.
-  ///
-  /// They turn back into real assertions the moment the chain answers, with no edit here.
-  function _requireDebtSwapLive(uint256 shares) internal {
-    uint256 snap = vm.snapshotState();
-    vm.prank(alice);
-    (bool ok, bytes memory ret) = address(stablePool).call(
-      abi.encodeWithSelector(IPool.swapLiability.selector, USDT, USDS, shares, 0, block.timestamp + 600)
-    );
-    vm.revertToState(snap);
-    if (ok) return;
-    if (ret.length >= 4 && bytes4(ret) == ZERO_VALUE) {
-      emit log("SKIP: swapLiability reverts ZeroValue() on this deployment. See README, Known issues.");
-      vm.skip(true);
-    }
-  }
-
+  ///      The `warpPastCooldown` is the part an integrator has to copy. Freshly minted shares are
+  ///      frozen for `flowCooldownSecs`, so a deposit and a `swapLiability` in the same block
+  ///      revert `CooldownActive()`. That freeze is what stops a deposit-flip-exit sandwich from
+  ///      harvesting an index or coverage move it carried no risk for. The window is read off the
+  ///      pool (see `BTRForkTest.warpPastCooldown`): it is an admin-settable `uint16`, so a
+  ///      hardcoded literal here would pass today and break silently the day it is retuned.
   function _lp(uint256 whole) internal returns (uint256 shares) {
     uint256 amount = units(USDT, whole);
     fund(USDT, amount, address(stablePool));
     vm.prank(alice);
     IPool.DepositResult memory r = stablePool.deposit(USDT, amount);
+    warpPastCooldown(stablePool);
     return r.lpAmount - r.deadLp;
   }
 
@@ -76,7 +66,6 @@ contract DebtSwapTest is BTRForkTest {
 
   function test_swapLiabilityMovesTheClaimNotTheReserves() public {
     uint256 shares = _lp(10_000);
-    _requireDebtSwapLive(shares);
 
     uint256 usdtBalBefore = IERC20(USDT).balanceOf(address(stablePool));
     uint256 usdsBalBefore = IERC20(USDS).balanceOf(address(stablePool));
@@ -105,30 +94,49 @@ contract DebtSwapTest is BTRForkTest {
   /// of shares: the two legs have different liquidity indexes, so shares are not comparable
   /// across legs. Compare VALUE, via `previewWithdraw`, or you will "lose" liquidity that is
   /// still there.
+  ///
+  /// AND WHAT CROSSES IS MARKED TO THE DESTINATION LEG'S COVERAGE. Leaving a healthy leg for a
+  /// weak one hands you a claim on the weak one, shortfall included: the pool will not sell you
+  /// the discount, because that would let an LP arb the coverage gap at the expense of everyone
+  /// already standing in the weak leg. So the carry is NOT par between two stables. It is
+  ///
+  ///     claim_out  ~=  value_in * min(coverage(tokenOut), 1.0)
+  ///
+  /// which is why the expected number below is DERIVED from `getCoverageRatio` at call time
+  /// rather than written down: it swings with the pool, in both directions, and a hardcoded band
+  /// would be asserting yesterday's inventory.
+  ///
+  /// Read BOTH return values of `previewWithdraw`, `(amount, haircut)`. Called on the destination
+  /// leg after the swap it also prices in the coverage move THIS SWAP JUST CAUSED, so add the
+  /// haircut back to see the claim itself.
   function test_valueIsPreservedEvenThoughShareCountsDiffer() public {
     uint256 shares = _lp(10_000);
-    _requireDebtSwapLive(shares);
     (uint256 valueIn,) = stablePool.previewWithdraw(USDT, shares);
+    uint256 covOut = stablePool.getCoverageRatio(USDS);
 
     vm.prank(alice);
     uint256 outShares = stablePool.swapLiability(USDT, USDS, shares, 0, block.timestamp + 600);
 
-    (uint256 valueOut,) = stablePool.previewWithdraw(USDS, outShares);
+    (uint256 valueOut, uint256 haircutOut) = stablePool.previewWithdraw(USDS, outShares);
+    uint256 claimOut = valueOut + haircutOut; // the claim before the destination leg's haircut
+    uint256 expected = valueIn * (covOut < 1e18 ? covOut : 1e18) / 1e18;
 
-    emit log_named_uint("shares in ", shares);
-    emit log_named_uint("shares out", outShares);
-    emit log_named_uint("value in  ", valueIn);
-    emit log_named_uint("value out ", valueOut);
+    emit log_named_uint("shares in  ", shares);
+    emit log_named_uint("shares out ", outShares);
+    emit log_named_uint("value in   ", valueIn);
+    emit log_named_uint("USDS covge ", covOut);
+    emit log_named_uint("claim out  ", claimOut);
+    emit log_named_uint("expected   ", expected);
+    emit log_named_uint("value out  ", valueOut);
 
     assertLe(valueOut, valueIn + 1, "a debt swap must never mint value");
-    assertApproxEqRel(valueOut, valueIn, 0.02e18, "value lost beyond the haircut band");
+    assertApproxEqRel(claimOut, expected, 0.02e18, "carry missed the coverage-implied claim");
   }
 
   /// `minLpAmountOut` is a SHARE floor and it must bite. Quote it first with a zero-floor call on
   /// a snapshot, then re-run with the real floor: there is no `previewSwapLiability`.
   function test_shareFloorBites() public {
     uint256 shares = _lp(5_000);
-    _requireDebtSwapLive(shares);
 
     uint256 snap = vm.snapshotState();
     vm.prank(alice);
@@ -148,13 +156,22 @@ contract DebtSwapTest is BTRForkTest {
 
   /// A debt swap is round-trippable, minus whatever haircut the legs' coverage imposes each way.
   /// Round-tripping is not free, and a strategy that flips legs on every signal pays for it.
+  ///
+  /// Most of the printed cost below is NOT a fee. A position this size moves the destination
+  /// leg's coverage, and the return trip then re-crosses a leg it has itself made worse. Size
+  /// relative to the leg is the dominant term; read the number as impact, not as a tariff.
   function test_roundTripCostsTheHaircut() public {
     uint256 shares = _lp(10_000);
-    _requireDebtSwapLive(shares);
     (uint256 valueStart,) = stablePool.previewWithdraw(USDT, shares);
 
     vm.prank(alice);
     uint256 mid = stablePool.swapLiability(USDT, USDS, shares, 0, block.timestamp + 600);
+
+    // The shares the first leg just MINTED are themselves fresh, so the return trip is frozen for
+    // another `flowCooldownSecs`. A flip-on-every-signal strategy pays the cooldown as well as the
+    // haircut, and it cannot round-trip inside one block at all.
+    warpPastCooldown(stablePool);
+
     vm.prank(alice);
     uint256 back = stablePool.swapLiability(USDS, USDT, mid, 0, block.timestamp + 600);
 
@@ -164,6 +181,29 @@ contract DebtSwapTest is BTRForkTest {
     emit log_named_uint("value start", valueStart);
     emit log_named_uint("value end  ", valueEnd);
     emit log_named_uint("round-trip cost", valueStart > valueEnd ? valueStart - valueEnd : 0);
+  }
+
+  /// The cooldown, proven rather than left as a comment. A deposit and a debt swap in the same
+  /// block revert, and the SAME call one window later goes through. This is the guard against
+  /// deposit-flip-exit flow abuse, and it is the single most likely reason a first integration of
+  /// `swapLiability` reverts on a pool that is otherwise perfectly healthy.
+  function test_cooldownBlocksASameBlockDebtSwap() public {
+    if (cooldownOf(stablePool) == 0) return; // guard disabled on this pool; nothing to prove
+
+    uint256 amount = units(USDT, 1_000);
+    fund(USDT, amount, address(stablePool));
+    vm.prank(alice);
+    IPool.DepositResult memory r = stablePool.deposit(USDT, amount);
+    uint256 shares = r.lpAmount - r.deadLp;
+
+    vm.prank(alice);
+    vm.expectRevert(IPool.CooldownActive.selector);
+    stablePool.swapLiability(USDT, USDS, shares, 0, block.timestamp + 600);
+
+    warpPastCooldown(stablePool);
+    vm.prank(alice);
+    uint256 out = stablePool.swapLiability(USDT, USDS, shares, 0, block.timestamp + 600);
+    assertGt(out, 0, "the same call must clear once the window has elapsed");
   }
 
   /// Same leg in and out is not a debt swap. Rejected rather than treated as a no-op.

@@ -10,10 +10,16 @@
  *
  * WHAT IT IS NOT: A TRADE. RESERVES DO NOT MOVE. Only the liability side of two legs changes.
  *   - both legs need bit 2 (`LIABILITY_SWAP_ENABLED_BIT`) set in `getRiskFlags`
- *   - an UNDER-COVERED input leg takes a haircut on the way out
+ *   - an UNDER-COVERED input leg takes a haircut on the way out, and an UNDER-COVERED
+ *     destination leg marks the arriving claim down to its coverage: joining a weak leg at
+ *     par would be arbing the shortfall at the expense of whoever is already in it
  *   - BOTH amounts are LP SHARES, not token units. `minLpAmountOut` is a SHARE floor, and shares
  *     are NOT comparable across legs: the two legs carry different liquidity indexes. Compare
  *     VALUE with `previewWithdraw` on each side.
+ *   - THE FLOW COOLDOWN APPLIES. A debt swap moves an LP claim, so the same anti-flow-abuse
+ *     freeze that gates a withdraw gates this: shares minted less than `flowCooldownSecs` ago
+ *     revert `CooldownActive()`. Deposit and swap in one block does not work. Read the window off
+ *     the pool, it is an admin-settable `uint16`.
  *
  * THERE IS NO `previewSwapLiability`. The honest way to learn the output share count is to
  * `eth_call` the real function: a state-changing signature simulated, never mined.
@@ -24,7 +30,7 @@ import { encodeFunctionData } from 'viem';
 import { deadline, fmt, pool, token, withRetry, type Address } from '../src/config.ts';
 import { POOL_ABI, armed, publicClient, send, senderOrPlaceholder, type Call } from '../src/viem-client.ts';
 import { lpBalance } from './04-deposit.ts';
-import { previewWithdraw } from './05-withdraw.ts';
+import { flowCooldownSecs, previewWithdraw } from './05-withdraw.ts';
 
 export const LIABILITY_SWAP_ENABLED_BIT = 1 << 2;
 
@@ -72,6 +78,7 @@ if (import.meta.main) {
   await assertLegsEnabled(p, from, to);
   console.log(`pool        ${p}`);
   console.log('legs        USDT -> USDS, both liability-swap enabled');
+  console.log(`cooldown    ${await flowCooldownSecs(p)}s   (shares minted inside it cannot be re-denominated)`);
 
   const shares = await lpBalance(p, user, from);
   console.log(`lp balance  ${fmt(shares)} USDT shares`);
@@ -85,7 +92,8 @@ if (import.meta.main) {
     quoted = await simulateShareOut(p, from, to, shares, user);
   } catch (e) {
     console.error(`simulation reverted: ${(e as Error).message.split('\n')[0]}`);
-    console.error('See the repository README, "Known issues", before assuming this is your bug.');
+    console.error('`CooldownActive()` (0xaa9a98df) means the shares are still inside the flow');
+    console.error('cooldown printed above. Anything else: check the risk flags on both legs.');
     process.exit(1);
   }
 
