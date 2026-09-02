@@ -5,9 +5,9 @@
   "type": "module",
   "description": "Runnable BTR integration examples: oracle, router, pool swap, deposit, withdraw, debt swap",
   "scripts": {
-    "test": "bun test",
+    "test": "bun run test:read && bun run test:fork",
     "test:read": "bun test test/read",
-    "test:fork": "bun test test/fork"
+    "test:fork": "bun scripts/fork.ts"
   },
   "dependencies": {
     "@btr-protocol/sdk": "github:btr-protocol/sdk",
