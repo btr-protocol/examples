@@ -32,6 +32,28 @@ const ANVIL_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f
  * free one.
  */
 const cups = process.env.ANVIL_CUPS ?? '100';
+
+/**
+ * REFUSE A PORT SOMEONE ELSE IS ON. A second anvil cannot bind an occupied port, so without this
+ * the spawn below fails, the readiness probe answers from whatever is ALREADY listening, and the
+ * whole suite runs against a stranger's node. That is not hypothetical: a day-old fork left on
+ * 8545 still serves the pre-upgrade contract implementations, so every write test asserts against
+ * yesterday's chain and reports it as a contract bug. An occupied port is an unknown node, and an
+ * unknown node is not a fork of anything you chose.
+ */
+const occupied = await fetch(rpc, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
+})
+  .then((r) => r.ok)
+  .catch(() => false);
+if (occupied) {
+  console.error(`${rpc} is already serving. Stop it, or set ANVIL_PORT to a free port.`);
+  console.error('Refusing to test against a node this script did not start.');
+  process.exit(1);
+}
+
 const anvil = Bun.spawn(
   [
     'anvil', '--fork-url', forkUrl, '--port', String(port), '--silent',
