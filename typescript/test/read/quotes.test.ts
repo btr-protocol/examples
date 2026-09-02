@@ -8,19 +8,25 @@
  * Run: bun test test/read
  */
 import { describe, expect, test } from 'bun:test';
-import { config, pool, token } from '../../src/config.ts';
+import { config, diffBps, impliedWad, pool, token } from '../../src/config.ts';
 import * as sdkSwap from '../../sdk/03-pool-swap.ts';
 import * as rpcSwap from '../../rpc/03-pool-swap.ts';
 import * as sdkRouter from '../../sdk/02-router-swap.ts';
 import * as rpcRouter from '../../rpc/02-router-swap.ts';
-import { publicClient, ROUTER_ABI } from '../../src/viem-client.ts';
+import { decimalsOf, publicClient, ROUTER_ABI } from '../../src/viem-client.ts';
 
 const USDCB = token(config.baseToken);
 const USDT = token('USDT');
 const USDS = token('USDS');
 const WETH = token('WETH');
+const EURC = token('EURC');
+const JPYC = token('JPYC');
+const NVDA = token('NVDA');
+const TSLA = token('TSLA');
 const stable = pool('stablePool');
 const crypto = pool('cryptoPool');
+const fx = pool('fxPool');
+const stocks = pool('stocksPool');
 const ONE_K = 1_000n * 10n ** 18n;
 const RECIPIENT = '0x000000000000000000000000000000000000dEaD' as const;
 
@@ -54,6 +60,65 @@ describe('pool quotes', () => {
     // Same block is not guaranteed, so compare within a band rather than exactly.
     const diff = a.amountOut > b.amountOut ? a.amountOut - b.amountOut : b.amountOut - a.amountOut;
     expect(Number((diff * 10_000n) / a.amountOut)).toBeLessThan(50);
+  }, 30_000);
+});
+
+// FX and tokenised equities, not just the crypto pool. Two things break here that do not break
+// on an 18/18 pair: EURC is a 6-decimal token, and the unit prices span JPYC at ~0.0063 USD to
+// ASML at ~1658. Every assertion below normalises decimals before it compares anything, because
+// the raw ratio is out by 1e12 on the EURC leg and nothing throws when it is.
+describe('fx pool quotes', () => {
+  test('base to a 6-decimal FX leg prices within 2% of the mark', async () => {
+    const q = await sdkSwap.quote(fx, USDCB, EURC, ONE_K);
+    expect(q.amountOut).toBeGreaterThan(0n);
+    expect(q.markPrice).toBeGreaterThan(0n);
+    const decOut = await decimalsOf(EURC);
+    expect(decOut).toBe(6); // the premise of this test, asserted rather than assumed
+    const implied = impliedWad(ONE_K, 18, q.amountOut, decOut);
+    expect(diffBps(implied, q.markPrice)).toBeLessThan(200);
+    // And the trap, stated: the raw ratio a same-decimals integration would compute is not close.
+    const naive = (q.amountOut * 10n ** 18n) / ONE_K;
+    expect(diffBps(naive, q.markPrice)).toBeGreaterThan(9_000);
+  }, 30_000);
+
+  test('a sub-unit FX leg quotes a huge integer, not a rounded zero', async () => {
+    const q = await sdkSwap.quote(fx, USDCB, JPYC, ONE_K);
+    // ~159k JPYC for 1k USDCB. A whole-unit intermediate would floor the price to 0 and this
+    // would still return something, which is why the assertion is on the mark, not the output.
+    expect(q.markPrice).toBeGreaterThan(0n);
+    expect(q.markPrice).toBeGreaterThan(10n ** 19n); // > 10 JPYC per USDCB
+    const implied = impliedWad(ONE_K, 18, q.amountOut, await decimalsOf(JPYC));
+    expect(diffBps(implied, q.markPrice)).toBeLessThan(200);
+  }, 30_000);
+
+  test('the vanilla path agrees on the FX quote', async () => {
+    const a = await sdkSwap.quote(fx, USDCB, EURC, ONE_K);
+    const b = await rpcSwap.quote(fx, USDCB, EURC, ONE_K);
+    expect(diffBps(a.amountOut, b.amountOut)).toBeLessThan(50);
+  }, 30_000);
+});
+
+describe('stocks pool quotes', () => {
+  // An integrator trading tokenised equities routes through the stocks pool, not the crypto one.
+  test('base to equity quotes non-zero on both legs', async () => {
+    for (const [sym, tk] of [['NVDA', NVDA], ['TSLA', TSLA]] as const) {
+      const q = await sdkSwap.quote(stocks, USDCB, tk, ONE_K);
+      expect(q.amountOut).toBeGreaterThan(0n);
+      expect(q.markPrice).toBeGreaterThan(0n);
+      const implied = impliedWad(ONE_K, 18, q.amountOut, await decimalsOf(tk));
+      expect(diffBps(implied, q.markPrice)).toBeLessThan(200);
+      // A share costs hundreds of dollars, so tokenOut per USDCB is a SMALL WAD, ~4.6e15 for
+      // NVDA. Asserting `markPrice > 1e18` here is the mistake: it would reject every equity.
+      expect(q.markPrice).toBeLessThan(10n ** 18n);
+      console.log(`    ${sym}: 1000 USDCB -> ${q.amountOut} raw, mark ${q.markPrice} WAD`);
+    }
+  }, 60_000);
+
+  test('equity to equity routes through the pool base in one call', async () => {
+    const q = await rpcSwap.quote(stocks, NVDA, TSLA, 10n ** 18n);
+    expect(q.amountOut).toBeGreaterThan(0n);
+    expect(q.routeHops.length).toBe(3);
+    expect(q.routeHops[1].toLowerCase()).toBe(USDCB.toLowerCase());
   }, 30_000);
 });
 

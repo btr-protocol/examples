@@ -35,6 +35,12 @@ export interface BtrConfig {
   baseToken: string;
   tokens: Record<string, Address>;
   feeds: Record<string, Hex>;
+  /**
+   * Which trading calendar a feed follows. NOT a risk class: `ttlSecs` is on chain and is read
+   * from there. This is the one fact the chain cannot tell you, namely whether a stale feed is an
+   * outage or a closed market, and it belongs in config for the same reason every address does.
+   */
+  calendars: Record<string, string[]>;
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -72,6 +78,40 @@ export const pool = (name: string): Address => {
   if (!p) throw new Error(`pool ${name} is not in config/${config.chainId}.json`);
   return p;
 };
+
+/** True when `symbol` tracks a market that closes, i.e. when stale can be normal. */
+export const followsUsEquityCalendar = (symbol: string): boolean =>
+  (config.calendars.usEquity ?? []).includes(symbol);
+
+/**
+ * Rough US cash session, in UTC. Holidays are not modelled: widen it to taste. It exists to tell
+ * a CLOSED MARKET apart from an OUTAGE, and nothing else depends on its precision.
+ */
+export function usMarketOpen(d = new Date()): boolean {
+  const day = d.getUTCDay();
+  if (day === 0 || day === 6) return false;
+  const mins = d.getUTCHours() * 60 + d.getUTCMinutes();
+  return mins >= 13 * 60 + 30 && mins < 20 * 60; // 13:30-20:00Z
+}
+
+/**
+ * Whole-unit price of `tokenOut` per `tokenIn`, WAD, from a RAW in/out pair.
+ *
+ * The pool quotes `markPrice` in whole units, so a raw-amount ratio only lines up with it once
+ * both token decimals are divided out. EURC is 6 decimals against USDCB's 18: compare the raw
+ * ratio and you are out by 1e12, which does not throw. It reads as a 99.9999% price impact, or,
+ * if you floor it, as a clean zero that an `expect(x).toBe(0n)` will happily certify.
+ */
+export const impliedWad = (
+  amountIn: bigint,
+  decimalsIn: number,
+  amountOut: bigint,
+  decimalsOut: number,
+): bigint => (amountOut * 10n ** BigInt(18 + decimalsIn)) / (amountIn * 10n ** BigInt(decimalsOut));
+
+/** Absolute difference between two WAD prices, in bps of `b`. */
+export const diffBps = (a: bigint, b: bigint): number =>
+  Number(((a > b ? a - b : b - a) * 10_000n) / b);
 
 /** Unix-seconds deadline, `secs` from now. */
 export const deadline = (secs = 600): bigint => BigInt(Math.floor(Date.now() / 1000) + secs);

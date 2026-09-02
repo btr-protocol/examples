@@ -6,6 +6,11 @@ TypeScript through a plain JSON-RPC client with no BTR dependency at all.
 
 Every example is executed against a real deployment by the test suite. Nothing here is a sketch.
 
+Four asset classes are exercised, not one: stables, FX (EURC, JPYC), tokenised equities (NVDA,
+ASML, TSLA) and crypto (WETH). They are here because they break different assumptions - EURC is a
+6-decimal token, JPYC is worth a fraction of a cent, an NVDA share is worth hundreds of dollars,
+and an equity feed is stale for most of the week on purpose.
+
 | # | Operation | Solidity (Foundry) | TypeScript, SDK | TypeScript, vanilla RPC | Guide |
 |---|---|---|---|---|---|
 | 1 | Consume price feeds | [`OracleConsumer.sol`](foundry/src/OracleConsumer.sol) · [test](foundry/test/01_OracleConsumption.t.sol) | [`sdk/01-oracle.ts`](typescript/sdk/01-oracle.ts) | [`rpc/01-oracle.ts`](typescript/rpc/01-oracle.ts) | [Consuming Price Feeds](https://btr.markets/docs/5-1-5-consuming-price-feeds) |
@@ -18,7 +23,7 @@ Every example is executed against a real deployment by the test suite. Nothing h
 ## Layout
 
 ```
-config/<chainId>.json   every address, in one place. Nothing is inlined in an example.
+config/<chainId>.json   every address, feed id and calendar, in one place. Nothing is inlined.
 foundry/                Solidity: minimal interfaces, one consumer contract, six fork suites.
 typescript/sdk/         off chain, using @btr-protocol/sdk.
 typescript/rpc/         off chain, using viem only. No BTR dependency.
@@ -42,7 +47,9 @@ cd examples/typescript && bun install
 ## Run everything
 
 ```bash
-# Solidity: 44 tests, forked against the live chain, executing real swaps and LP flows.
+# Solidity: 57 tests, forked against the live chain, executing real swaps and LP flows.
+# Point BTR_RPC_URL at your own endpoint: the suite forks from the config's `rpcUrl`, so
+# `forge test --fork-url ...` does NOT change where it reads from.
 cd foundry && forge test -vv
 
 # TypeScript, read-only, against the live chain. No key, no state change.
@@ -105,7 +112,7 @@ Pick it when you do not want a dependency, or when TypeScript is not your stack 
 reference. What you give up is transcription risk: the freshness rule, the 13-field `SwapQuote`
 tuple and the nested `Part[]`/`Hop[]` encoding are yours to get right.
 
-## The five things that bite integrators
+## The seven things that bite integrators
 
 1. **Zero is not a price.** `mark1e18 == 0` is the STALE sentinel a feed carries before its first
    accepted push. An unconfigured feed id does not return zero, it reverts `FeedNotFound`.
@@ -119,6 +126,16 @@ tuple and the nested `Part[]`/`Hop[]` encoding are yours to get right.
    why `maxRedeem` is zero right after a deposit.
 5. **A debt swap is denominated in LP SHARES on both sides**, and shares are not comparable across
    legs: each leg carries its own liquidity index. Compare VALUE through `previewWithdraw`.
+6. **Decimals are not 18.** EURC is 6. `SwapQuote.markPrice` is a WHOLE-UNIT price, so a raw
+   `amountOut / amountIn` ratio only matches it when both legs share a decimal count. On the
+   USDCB/EURC leg the raw ratio is out by 1e12, and nothing reverts: it reads as a 99.9999% price
+   impact, or as a clean zero if you floor it, and a zero passes an equality check against another
+   zero. Every amount in these examples is built from the token's own `decimals()`.
+7. **Stale is normal for an equity, and only for an equity.** The US cash session is about 30% of
+   the week and the keeper deliberately does not heartbeat a frozen record. A stale NVDA feed at
+   03:00 UTC on a Sunday is the system working; a stale WETH, EURC or JPYC feed never is. The
+   oracle examples return `live` / `closed` / `incident` rather than a boolean, and the tests that
+   need an open market SKIP loudly with the reason instead of failing every weekend.
 
 ## Known issues
 

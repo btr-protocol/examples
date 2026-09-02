@@ -126,4 +126,70 @@ contract DepositTest is BTRForkTest {
     uint256 gapAfter = afterCov > 1e18 ? afterCov - 1e18 : 1e18 - afterCov;
     assertLe(gapAfter, gapBefore, "a deposit must move coverage toward parity, never away from it");
   }
+
+  /// ------------------------------------------------------------------------------------------
+  /// The same flow on the FX and stocks pools. An LP leg is denominated in the LEG'S OWN token,
+  /// so every amount below is built from that token's `decimals()`, never from a literal 1e18.
+  /// ------------------------------------------------------------------------------------------
+
+  /// EURC is 6 decimals. `units()` is the only reason this reads the same as the USDT case, and
+  /// a hardcoded `10_000e18` here would ask the pool for 10 billion EURC.
+  function test_fxPoolSixDecimalLegMintsShares() public {
+    assertEq(IERC20(EURC).decimals(), 6, "the premise of this test");
+    uint256 amount = units(EURC, 10_000);
+    assertEq(amount, 10_000e6, "derived, not assumed");
+    fund(EURC, amount, address(fxPool));
+
+    vm.prank(alice);
+    IPool.DepositResult memory r = fxPool.deposit(EURC, amount);
+
+    assertGt(r.lpAmount, 0, "a zero mint is a failure, not a deposit");
+    assertEq(r.actualDeposit, amount, "the pool took a different amount than asked");
+    assertEq(fxPool.getLPBalance(alice, EURC), r.lpAmount - r.deadLp);
+    assertEq(IERC20(EURC).balanceOf(alice), 0, "the whole deposit should have been pulled");
+
+    (uint256 back,) = fxPool.previewWithdraw(EURC, r.lpAmount - r.deadLp);
+    assertGt(back, 0, "a zero preview is a failure, not a valuation");
+    assertLe(back, amount, "a same-block round trip must never return more than it took");
+
+    emit log_named_uint("deposited (EURC, 6dp)", amount);
+    emit log_named_uint("shares minted        ", r.lpAmount);
+  }
+
+  /// A tokenised-equity leg. 100 NVDA is a five-figure USD position out of a three-digit token
+  /// amount, which is the opposite shape to every stable example above it.
+  function test_stocksPoolEquityLegMintsShares() public {
+    uint256 amount = units(NVDA, 100);
+    fund(NVDA, amount, address(stocksPool));
+
+    uint256 before = stocksPool.getLPBalance(alice, NVDA);
+    vm.prank(alice);
+    IPool.DepositResult memory r = stocksPool.deposit(NVDA, amount);
+
+    assertGt(r.lpAmount, 0);
+    assertEq(stocksPool.getLPBalance(alice, NVDA) - before, r.lpAmount - r.deadLp);
+    assertTrue(stocksPool.lpToken(NVDA) != address(0), "leg is not listed");
+
+    emit log_named_uint("deposited (NVDA)", amount);
+    emit log_named_uint("shares minted   ", r.lpAmount);
+  }
+
+  /// Coverage dilutes toward parity on an equity leg exactly as it does on a stable one. The
+  /// asset class does not change the accounting.
+  function test_stocksPoolDepositMovesCoverageTowardParity() public {
+    uint256 amount = units(NVDA, 500);
+    fund(NVDA, amount, address(stocksPool));
+
+    uint256 before = stocksPool.getCoverageRatio(NVDA);
+    vm.prank(alice);
+    stocksPool.deposit(NVDA, amount);
+    uint256 afterCov = stocksPool.getCoverageRatio(NVDA);
+
+    uint256 gapBefore = before > 1e18 ? before - 1e18 : 1e18 - before;
+    uint256 gapAfter = afterCov > 1e18 ? afterCov - 1e18 : 1e18 - afterCov;
+    assertLe(gapAfter, gapBefore, "a deposit must move coverage toward parity");
+
+    emit log_named_decimal_uint("coverage before", before, 18);
+    emit log_named_decimal_uint("coverage after ", afterCov, 18);
+  }
 }

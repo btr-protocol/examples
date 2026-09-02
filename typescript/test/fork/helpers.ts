@@ -9,20 +9,29 @@
  * number is hardcoded anywhere in this repository.
  */
 import { encodeFunctionData, toHex } from 'viem';
-import type { Address } from '../../src/config.ts';
+import { withRetry, type Address } from '../../src/config.ts';
 import { publicClient, ERC20_ABI, walletClient } from '../../src/viem-client.ts';
 
-const rpc = async (method: string, params: unknown[]) => {
-  const r = await fetch(publicClient.transport.url as string, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+/**
+ * Every call here is a READ or an anvil cheat against a LOCAL fork, and both are idempotent, so
+ * both are safe to retry. They still need it: anvil serves a cache miss by asking the upstream
+ * endpoint, and a public endpoint answers 429. A 429 that reaches a test reads as "the token has
+ * no code" or "the pool returned nothing", which is a failed read wearing an empty read's
+ * clothes. Retrying is the only answer that does not certify a lie.
+ */
+const rpc = (method: string, params: unknown[]) =>
+  withRetry(async () => {
+    const r = await fetch(publicClient.transport.url as string, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    });
+    const j = (await r.json()) as { error?: { message: string }; result?: unknown };
+    if (j.error) throw new Error(`${method}: ${j.error.message}`);
+    return j.result;
   });
-  const j = (await r.json()) as { error?: { message: string }; result?: unknown };
-  if (j.error) throw new Error(`${method}: ${j.error.message}`);
-  return j.result;
-};
 
+/** Deliberately NOT retried: the probe below expects this to fail on the wrong slot. */
 const balanceOf = (token: Address, owner: Address) =>
   publicClient.readContract({ address: token, abi: ERC20_ABI, functionName: 'balanceOf', args: [owner] });
 
@@ -53,7 +62,18 @@ async function findBalanceSlot(token: Address, owner: Address): Promise<`0x${str
   for (const key of keys) {
     const before = (await rpc('eth_getStorageAt', [token, key, 'latest'])) as string;
     await rpc('anvil_setStorageAt', [token, key, toHex(probe, { size: 32 })]);
-    const changed = (await balanceOf(token, owner)) === probe;
+    // `balanceOf` can FAIL rather than return here, and that is a hit on a slot we should skip,
+    // not an error. Most of these tokens are proxies, so the access list also names the ERC-1967
+    // implementation pointer; overwriting it makes the delegatecall land on an empty address and
+    // `balanceOf` comes back as `0x`. The write is undone on the next line either way, so the
+    // only correct response is to move on to the next candidate. Not catching this is why the
+    // 6-decimal FX leg could not be funded at all.
+    let changed = false;
+    try {
+      changed = (await balanceOf(token, owner)) === probe;
+    } catch {
+      changed = false;
+    }
     await rpc('anvil_setStorageAt', [token, key, before]);
     if (changed) {
       cache.set(`${token}:${owner}`.toLowerCase(), key);

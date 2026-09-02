@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { config, fmt, pool, token, type Address } from '../../src/config.ts';
-import { account, armed, balanceOf, send } from '../../src/viem-client.ts';
+import { account, armed, balanceOf, decimalsOf, send } from '../../src/viem-client.ts';
 import * as sdkDep from '../../sdk/04-deposit.ts';
 import * as rpcDep from '../../rpc/04-deposit.ts';
 import * as sdkWd from '../../sdk/05-withdraw.ts';
@@ -16,7 +16,11 @@ import { deal, revert, snapshot, warp } from './helpers.ts';
 
 const USDT = token('USDT');
 const USDS = token('USDS');
+const EURC = token('EURC');
+const NVDA = token('NVDA');
 const stable = pool('stablePool');
+const fx = pool('fxPool');
+const stocks = pool('stocksPool');
 const TEN_K = 10_000n * 10n ** 18n;
 
 let me: Address;
@@ -180,4 +184,88 @@ describe('example 6: debt swap (swapLiability)', () => {
     const drift = valueIn > valueOut ? valueIn - valueOut : valueOut - valueIn;
     expect(Number((drift * 10_000n) / valueIn)).toBeLessThan(200);
   }, 120_000);
+});
+
+/**
+ * The same deposit and withdraw flow on the FX and stocks pools.
+ *
+ * It is here because an LP leg is denominated in the LEG'S OWN token, not in the pool base, and
+ * the two pools break the assumption an 18-decimal stable pair lets you keep: EURC is 6 decimals,
+ * and one NVDA share costs hundreds of dollars. Every amount below is built from the token's own
+ * `decimals()`, never from a hardcoded 1e18, and every floor comes from `previewWithdraw`.
+ */
+describe('examples 4 and 5 on the FX pool: a 6-decimal LP leg', () => {
+  test('deposit then full exit, with the floor taken from the preview', async () => {
+    const dec = await decimalsOf(EURC);
+    expect(dec).toBe(6);
+    const amount = 10_000n * 10n ** BigInt(dec);
+
+    await deal(EURC, me, amount * 2n);
+    const before = await sdkDep.lpBalance(fx, me, EURC);
+    await send(sdkDep.depositCalls(fx, EURC, amount));
+
+    const minted = (await sdkDep.lpBalance(fx, me, EURC)) - before;
+    expect(minted).toBeGreaterThan(0n);
+
+    // Freshly minted shares are frozen, on this pool exactly as on the stable one.
+    expect(await sdkWd.maxRedeem(fx, me, EURC)).toBe(0n);
+    await warp(Number(await rpcWd.flowCooldownSecs(fx)) + 1);
+
+    const shares = await sdkDep.lpBalance(fx, me, EURC);
+    const w = await sdkWd.withdrawCall(fx, EURC, shares, 10);
+    const bal = await balanceOf(EURC, me);
+    await send([w.call]);
+
+    const got = (await balanceOf(EURC, me)) - bal;
+    expect(got).toBeGreaterThanOrEqual(w.minAmountOut);
+    // The payout is in EURC's 6 decimals. Asserting it against an 18-decimal constant would make
+    // this pass on a number 1e12 too small, which is the whole reason the constant is derived.
+    expect(got).toBeGreaterThan(amount / 2n);
+    expect(got).toBeLessThanOrEqual(amount);
+    console.log(`    ${fmt(shares)} shares -> ${fmt(got, dec)} EURC (haircut ${fmt(w.haircut, dec)})`);
+  }, 180_000);
+});
+
+describe('examples 4 and 5 on the stocks pool: a tokenised equity LP leg', () => {
+  test('deposit then partial exit redeems linearly', async () => {
+    const dec = await decimalsOf(NVDA);
+    const amount = 100n * 10n ** BigInt(dec); // 100 NVDA, ~21.6k USD at the live mark
+
+    await deal(NVDA, me, amount * 2n);
+    await send(rpcDep.depositCalls(stocks, NVDA, amount));
+    const shares = await rpcDep.lpBalance(stocks, me, NVDA);
+    expect(shares).toBeGreaterThan(0n);
+    await warp(Number(await rpcWd.flowCooldownSecs(stocks)) + 1);
+
+    const [full] = await rpcWd.previewWithdraw(stocks, NVDA, shares);
+    const [half] = await rpcWd.previewWithdraw(stocks, NVDA, shares / 2n);
+    expect(full).toBeGreaterThan(0n);
+    const drift = half * 2n > full ? half * 2n - full : full - half * 2n;
+    expect(Number((drift * 10_000n) / full)).toBeLessThan(2);
+
+    const w = await rpcWd.withdrawCall(stocks, NVDA, shares / 2n, 10);
+    const bal = await balanceOf(NVDA, me);
+    await send([w.call]);
+
+    const got = (await balanceOf(NVDA, me)) - bal;
+    expect(got).toBeGreaterThanOrEqual(w.minAmountOut);
+    expect(await rpcDep.lpBalance(stocks, me, NVDA)).toBe(shares - shares / 2n);
+    console.log(`    ${fmt(shares / 2n)} shares -> ${fmt(got, dec)} NVDA`);
+  }, 180_000);
+
+  test('a deposit moves the equity leg coverage TOWARD parity', async () => {
+    const dec = await decimalsOf(NVDA);
+    const amount = 500n * 10n ** BigInt(dec);
+    await deal(NVDA, me, amount * 2n);
+
+    const before = await sdkDep.coverage(stocks, NVDA);
+    await send(sdkDep.depositCalls(stocks, NVDA, amount));
+    const after = await sdkDep.coverage(stocks, NVDA);
+
+    const WAD = 10n ** 18n;
+    const gapBefore = before > WAD ? before - WAD : WAD - before;
+    const gapAfter = after > WAD ? after - WAD : WAD - after;
+    expect(gapAfter).toBeLessThanOrEqual(gapBefore);
+    console.log(`    coverage ${fmt(before)} -> ${fmt(after)}`);
+  }, 180_000);
 });

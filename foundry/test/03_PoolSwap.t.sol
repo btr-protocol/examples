@@ -128,4 +128,98 @@ contract PoolSwapTest is BTRForkTest {
     emit log_named_uint("USDCB in ", amountIn);
     emit log_named_uint("WETH out ", out);
   }
+
+  /// ------------------------------------------------------------------------------------------
+  /// FX and tokenised equities. Same three steps, two assumptions that only hold on stables.
+  /// ------------------------------------------------------------------------------------------
+
+  /// EURC is a 6-DECIMAL leg against USDCB's 18. `units()` builds the input from each token's own
+  /// `decimals()` and `impliedWad` divides both out before comparing against the mark, because
+  /// the raw ratio is off by 1e12 here and off by nothing at all on a stable pair, which is
+  /// exactly why the bug ships.
+  function test_fxPoolSixDecimalLeg() public {
+    assertEq(IERC20(EURC).decimals(), 6, "the premise of this test");
+    assertEq(IERC20(USDCB).decimals(), 18);
+
+    uint256 amountIn = units(USDCB, 1_000);
+    fund(USDCB, amountIn, address(fxPool));
+
+    IPool.SwapQuote memory q = fxPool.getSwapQuote(USDCB, EURC, amountIn);
+    assertGt(q.amountOut, 0, "a zero quote is a failure, not a price");
+
+    uint256 minOut = q.amountOut * (10_000 - SLIPPAGE_BPS) / 10_000;
+    vm.prank(alice);
+    uint256 out = fxPool.swap(USDCB, EURC, amountIn, minOut, alice, block.timestamp + 600);
+
+    assertGe(out, minOut);
+    assertLt(diffBps(impliedWad(USDCB, amountIn, EURC, out), q.markPrice), 200, "off the mark");
+    // And the trap, stated: the same comparison without the decimals correction is nowhere near.
+    assertGt(diffBps(out * 1e18 / amountIn, q.markPrice), 9_000, "raw ratio should be absurd");
+
+    emit log_named_uint("filled (EURC, 6dp)", out);
+    emit log_named_decimal_uint("markPrice         ", q.markPrice, 18);
+  }
+
+  /// JPYC is worth a fraction of a cent, so the OUTPUT is two orders of magnitude ABOVE the
+  /// input. Any slippage or sizing helper written against stables assumes the opposite.
+  function test_fxPoolSubUnitPrice() public {
+    uint256 amountIn = units(USDCB, 1_000);
+    fund(USDCB, amountIn, address(fxPool));
+
+    IPool.SwapQuote memory q = fxPool.getSwapQuote(USDCB, JPYC, amountIn);
+    uint256 minOut = q.amountOut * (10_000 - SLIPPAGE_BPS) / 10_000;
+
+    vm.prank(alice);
+    uint256 out = fxPool.swap(USDCB, JPYC, amountIn, minOut, alice, block.timestamp + 600);
+
+    assertGe(out, minOut);
+    assertGt(out, amountIn * 100, "~159k JPYC for 1k USDCB: output dwarfs the input");
+    assertLt(diffBps(impliedWad(USDCB, amountIn, JPYC, out), q.markPrice), 200);
+
+    emit log_named_uint("filled (JPYC)", out);
+  }
+
+  /// An integrator trading tokenised equities calls the STOCKS pool. One share costs hundreds of
+  /// dollars, so the output is two orders of magnitude BELOW the input, and `markPrice` is a
+  /// small WAD (~4.6e15 for NVDA). A sanity check of the form `markPrice > 1e18` rejects every
+  /// equity on the venue.
+  function test_stocksPoolBaseToEquity() public {
+    uint256 amountIn = units(USDCB, 1_000);
+    fund(USDCB, amountIn, address(stocksPool));
+
+    IPool.SwapQuote memory q = stocksPool.getSwapQuote(USDCB, NVDA, amountIn);
+    assertGt(q.amountOut, 0, "a zero quote is a failure, not a price");
+    assertLt(q.markPrice, 1e18, "tokenOut per USDCB is a SMALL wad for a share worth hundreds");
+
+    uint256 minOut = q.amountOut * (10_000 - SLIPPAGE_BPS) / 10_000;
+    vm.prank(alice);
+    uint256 out = stocksPool.swap(USDCB, NVDA, amountIn, minOut, alice, block.timestamp + 600);
+
+    assertGe(out, minOut);
+    assertLt(out, amountIn / 100, "1k USDCB buys single-digit shares");
+    assertLt(diffBps(impliedWad(USDCB, amountIn, NVDA, out), q.markPrice), 200);
+
+    emit log_named_uint("filled (NVDA)", out);
+    emit log_named_decimal_uint("markPrice    ", q.markPrice, 18);
+  }
+
+  /// Equity to equity is ONE call: the pool hops through its own base internally, and the base
+  /// never lands on the recipient.
+  function test_stocksPoolEquityToEquityIsOneCall() public {
+    uint256 amountIn = units(NVDA, 1);
+    fund(NVDA, amountIn, address(stocksPool));
+
+    IPool.SwapQuote memory q = stocksPool.getSwapQuote(NVDA, TSLA, amountIn);
+    assertEq(q.routeHops.length, 3, "NVDA -> USDCB -> TSLA");
+    assertEq(q.routeHops[1], USDCB, "the middle hop is the pool base");
+
+    uint256 minOut = q.amountOut * (10_000 - SLIPPAGE_BPS) / 10_000;
+    vm.prank(alice);
+    uint256 out = stocksPool.swap(NVDA, TSLA, amountIn, minOut, alice, block.timestamp + 600);
+
+    assertGe(out, minOut);
+    assertEq(IERC20(USDCB).balanceOf(alice), 0, "the intermediate must never be paid out");
+
+    emit log_named_uint("filled (TSLA)", out);
+  }
 }

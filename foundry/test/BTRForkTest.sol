@@ -27,12 +27,16 @@ abstract contract BTRForkTest is Test {
   IPool internal stablePool;
   IPool internal fxPool;
   IPool internal cryptoPool;
+  IPool internal stocksPool;
 
   address internal USDCB;
   address internal USDT;
   address internal USDS;
   address internal WETH;
   address internal EURC;
+  address internal JPYC;
+  address internal NVDA;
+  address internal TSLA;
 
   /// @dev Fresh EOA. Nothing here needs a funded key: `deal` mints balances into the fork.
   address internal alice = makeAddr("alice");
@@ -57,12 +61,16 @@ abstract contract BTRForkTest is Test {
     stablePool = IPool(addr(".pools.stablePool"));
     fxPool = IPool(addr(".pools.fxPool"));
     cryptoPool = IPool(addr(".pools.cryptoPool"));
+    stocksPool = IPool(addr(".pools.stocksPool"));
 
     USDCB = token("USDCB");
     USDT = token("USDT");
     USDS = token("USDS");
     WETH = token("WETH");
     EURC = token("EURC");
+    JPYC = token("JPYC");
+    NVDA = token("NVDA");
+    TSLA = token("TSLA");
 
     vm.deal(alice, 10 ether);
   }
@@ -87,7 +95,30 @@ abstract contract BTRForkTest is Test {
     IERC20(t).approve(spender, type(uint256).max);
   }
 
+  /// @dev Whole units of `t`, in `t`'s OWN decimals. EURC is 6 and WETH is 18 on this
+  ///      deployment, so a literal `1_000e18` is wrong for half the tokens here and wrong
+  ///      QUIETLY: it overfunds by 1e12 rather than reverting.
   function units(address t, uint256 whole) internal view returns (uint256) {
     return whole * (10 ** IERC20(t).decimals());
+  }
+
+  /// @dev Whole-unit price of `tokenOut` per `tokenIn`, WAD, from a RAW in/out pair.
+  ///
+  ///      `SwapQuote.markPrice` is quoted in whole units, so a raw ratio only lines up with it
+  ///      once both decimals are divided out. On the USDCB/EURC leg (18 against 6) the raw ratio
+  ///      is out by 1e12 and nothing reverts: it reads as a 99.9999% price impact, or as a clean
+  ///      zero if it is floored, and a zero compares equal to another zero all day.
+  function impliedWad(address tokenIn, uint256 amountIn, address tokenOut, uint256 amountOut)
+    internal
+    view
+    returns (uint256)
+  {
+    return amountOut * (10 ** (18 + uint256(IERC20(tokenIn).decimals())))
+      / (amountIn * (10 ** uint256(IERC20(tokenOut).decimals())));
+  }
+
+  /// @dev |a - b| in bps of `b`.
+  function diffBps(uint256 a, uint256 b) internal pure returns (uint256) {
+    return (a > b ? a - b : b - a) * 10_000 / b;
   }
 }

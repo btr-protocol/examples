@@ -21,8 +21,25 @@ const rpc = `http://127.0.0.1:${port}`;
  *  needed to exercise any of this. NEVER reuse it anywhere that holds value. */
 const ANVIL_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
 
+/**
+ * PACE THE UPSTREAM. Every cache miss inside the fork is a request to a public endpoint, and a
+ * public endpoint answers 429. A 429 is an UNKNOWN result, never a pass and never a failure, so
+ * the fork must retry it rather than surface it as a reverted swap.
+ *
+ * `--compute-units-per-second` is anvil's own outbound throttle: it is what keeps the suite under
+ * the limit instead of discovering it. `--retries` and `--fork-retry-backoff` handle the ones
+ * that get through anyway. Raise `ANVIL_CUPS` for a paid endpoint; the default is sized for a
+ * free one.
+ */
+const cups = process.env.ANVIL_CUPS ?? '100';
 const anvil = Bun.spawn(
-  ['anvil', '--fork-url', forkUrl, '--port', String(port), '--silent', '--chain-id', String(cfg.chainId)],
+  [
+    'anvil', '--fork-url', forkUrl, '--port', String(port), '--silent',
+    '--chain-id', String(cfg.chainId),
+    '--compute-units-per-second', cups,
+    '--retries', '10',
+    '--fork-retry-backoff', '2',
+  ],
   { stdout: 'pipe', stderr: 'pipe' },
 );
 

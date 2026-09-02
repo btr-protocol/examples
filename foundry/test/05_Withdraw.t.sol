@@ -26,10 +26,25 @@ import {IERC20, IPool} from "../src/interfaces/IBTR.sol";
  */
 contract WithdrawTest is BTRForkTest {
   /// @dev Seconds to wait out the anti-JIT cooldown. Read from the pool, not hardcoded.
-  function cooldown() internal view returns (uint256) {
+  function cooldownOf(IPool p) internal view returns (uint256) {
     (bool ok, bytes memory ret) =
-      address(stablePool).staticcall(abi.encodeWithSignature("flowCooldownSecs()"));
+      address(p).staticcall(abi.encodeWithSignature("flowCooldownSecs()"));
     return ok ? abi.decode(ret, (uint16)) : 0;
+  }
+
+  function cooldown() internal view returns (uint256) {
+    return cooldownOf(stablePool);
+  }
+
+  /// @dev Deposit `whole` units of `t` into `p` and return the redeemable shares. `units()` reads
+  ///      the token's own decimals, which is what lets the same helper serve a 6-decimal FX leg
+  ///      and an 18-decimal equity one.
+  function _deposit(IPool p, address t, uint256 whole) internal returns (uint256 shares) {
+    uint256 amount = units(t, whole);
+    fund(t, amount, address(p));
+    vm.prank(alice);
+    IPool.DepositResult memory r = p.deposit(t, amount);
+    return r.lpAmount - r.deadLp;
   }
 
   function _depositUsdt(uint256 whole) internal returns (uint256 shares) {
@@ -146,5 +161,62 @@ contract WithdrawTest is BTRForkTest {
     vm.prank(alice);
     vm.expectRevert();
     stablePool.withdraw(USDT, shares, 0, past);
+  }
+
+  /// ------------------------------------------------------------------------------------------
+  /// FX and equity legs. Same two rules (floor from the preview, wait out the cooldown), applied
+  /// where the token amounts no longer look like the stable case.
+  /// ------------------------------------------------------------------------------------------
+
+  /// A 6-decimal FX leg, exited in full. Every amount is in EURC's own decimals, and the floor
+  /// still comes from `previewWithdraw` rather than from what went in.
+  function test_fxPoolSixDecimalLegFullExit() public {
+    uint256 shares = _deposit(fxPool, EURC, 10_000);
+    assertEq(fxPool.maxRedeem(alice, EURC), 0, "freshly minted shares are frozen");
+
+    vm.warp(block.timestamp + cooldownOf(fxPool) + 1);
+    assertGe(fxPool.maxRedeem(alice, EURC), shares);
+
+    (uint256 preview, uint256 haircut) = fxPool.previewWithdraw(EURC, shares);
+    assertGt(preview, 0, "a zero preview is a failure, not a valuation");
+
+    uint256 before = IERC20(EURC).balanceOf(alice);
+    vm.prank(alice);
+    IPool.WithdrawResult memory r =
+      fxPool.withdraw(EURC, shares, preview * 9_990 / 10_000, block.timestamp + 600);
+
+    assertEq(r.amountOut, IERC20(EURC).balanceOf(alice) - before);
+    assertEq(r.amountOut, preview, "preview and fill must agree on a still market");
+    // The payout is in 6 decimals. Compared against an 18-decimal constant it would look like
+    // nothing came back at all, so the bound is derived from `units()` too.
+    assertLe(r.amountOut, units(EURC, 10_000));
+    assertGt(r.amountOut, units(EURC, 5_000));
+    assertEq(fxPool.getLPBalance(alice, EURC), 0);
+
+    emit log_named_uint("EURC out (6dp)", r.amountOut);
+    emit log_named_uint("haircut       ", haircut);
+  }
+
+  /// An equity leg, exited by half. Shares redeem linearly on the stocks pool exactly as they do
+  /// on the stable one; the asset class does not change the share maths.
+  function test_stocksPoolEquityLegPartialExit() public {
+    uint256 shares = _deposit(stocksPool, NVDA, 100);
+    vm.warp(block.timestamp + cooldownOf(stocksPool) + 1);
+
+    (uint256 full,) = stocksPool.previewWithdraw(NVDA, shares);
+    (uint256 half,) = stocksPool.previewWithdraw(NVDA, shares / 2);
+    assertGt(full, 0);
+    assertApproxEqRel(half * 2, full, 0.0002e18, "shares must redeem linearly");
+
+    uint256 before = IERC20(NVDA).balanceOf(alice);
+    vm.prank(alice);
+    IPool.WithdrawResult memory r =
+      stocksPool.withdraw(NVDA, shares / 2, half, block.timestamp + 600);
+
+    assertEq(r.amountOut, IERC20(NVDA).balanceOf(alice) - before);
+    assertGe(r.amountOut, half);
+    assertEq(stocksPool.getLPBalance(alice, NVDA), shares - shares / 2);
+
+    emit log_named_uint("NVDA out", r.amountOut);
   }
 }

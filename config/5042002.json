@@ -67,5 +67,19 @@
     "MSFT": "0x778b165de0bfe24e8806a0334dabd237c8f5844fb3d60a8d5b623d352120e784",
     "ORCL": "0x83c6210ed83e6bbd8db6d6dd43893d46cbc0a20efce89c30f6be2ce536ea74db",
     "META": "0x2d2201820627f4019b4ddd9d9742fc14a750d4df2f5413961e91c03e8af9581a"
+  },
+  "calendars": {
+    "usEquity": [
+      "AMD",
+      "ASML",
+      "AVGO",
+      "INTC",
+      "META",
+      "MSFT",
+      "NVDA",
+      "ORCL",
+      "SPCX",
+      "TSLA"
+    ]
   }
 }

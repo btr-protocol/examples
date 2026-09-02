@@ -15,7 +15,9 @@
  *
  * Run: bun run rpc/01-oracle.ts
  */
-import { config, feedId, fmt, withRetry, type Hex } from '../src/config.ts';
+import {
+  config, feedId, fmt, followsUsEquityCalendar, usMarketOpen, withRetry, type Hex,
+} from '../src/config.ts';
 import { ORACLE_ABI, publicClient } from '../src/viem-client.ts';
 
 export interface Feed {
@@ -77,19 +79,44 @@ export async function readAgreedMark(id: Hex, maxDivergenceBps = 100) {
   return { ...a, referenceMark1e18: b.mark1e18, divergenceBps };
 }
 
+/**
+ * The same three-way verdict as the SDK twin, transcribed. `live` | `closed` | `incident`.
+ *
+ * Crypto and FX trade continuously, so a stale WETH, EURC or JPYC feed is unconditionally an
+ * incident. An equity feed is stale for most of the week BY DESIGN: the US cash session is about
+ * 30% of it, and the keeper does not heartbeat a frozen record. Page on `incident` only.
+ */
+export type Verdict = 'live' | 'closed' | 'incident';
+
+export function classify(symbol: string, f: Feed, nowSecs = Date.now() / 1000) {
+  const ageSecs = Math.floor(nowSecs) - observedAtSecs(f);
+  const base = { mark1e18: f.mark1e18, ageSecs, ttlSecs: f.ttlSecs };
+  if (f.flags & 1) return { ...base, verdict: 'incident' as Verdict, page: true };
+  if (f.mark1e18 === 0n) return { ...base, verdict: 'incident' as Verdict, page: true };
+  if (ageSecs <= f.ttlSecs) return { ...base, verdict: 'live' as Verdict, page: false };
+  const closed = followsUsEquityCalendar(symbol) && !usMarketOpen();
+  return { ...base, verdict: (closed ? 'closed' : 'incident') as Verdict, page: !closed };
+}
+
 if (import.meta.main) {
   console.log(`${config.name} (chain ${config.chainId}), no SDK\n`);
-  for (const s of ['WETH', 'WBTC', 'EURC', 'USDT']) {
+  // FX (ttl 3600) beside equities and crypto (ttl 600). Same struct, three different meanings for
+  // the same age in seconds.
+  for (const s of ['EURC', 'JPYC', 'NVDA', 'ASML', 'TSLA', 'WETH']) {
     const id = feedId(s);
     const raw = await getFeed(config.contracts.oracle, id);
+    const st = classify(s, raw);
+    const head =
+      `${s.padEnd(6)} ${st.verdict.padEnd(8)} ttl=${String(st.ttlSecs).padStart(4)}s` +
+      ` age=${String(st.ageSecs).padStart(6)}s page=${st.page ? 'YES' : 'no '}`;
     try {
       const m = await readAgreedMark(id);
       console.log(
-        `${s.padEnd(6)} mark=${fmt(m.mark1e18).padStart(18)}  age=${String(m.ageSecs).padStart(4)}s` +
+        `${head}  mark=${fmt(m.mark1e18).padStart(22)}` +
           `  sigma=${m.sigmaPbps}pbps  conf=${raw.confidenceBps}bps  tierDiff=${m.divergenceBps}bps`,
       );
     } catch (e) {
-      console.log(`${s.padEnd(6)} REJECTED: ${(e as Error).message}`);
+      console.log(`${head}  REJECTED: ${(e as Error).message}`);
     }
   }
 

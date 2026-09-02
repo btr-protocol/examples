@@ -7,6 +7,15 @@ optimizer = true
 optimizer_runs = 200
 evm_version = "prague"
 
+# PACE THE UPSTREAM. Every cache miss is a request to a public endpoint, and the suite forks per
+# test contract, so an unthrottled run burns through a free tier's limit in seconds and reports
+# the 429s as failed tests. A 429 is an UNKNOWN result, never a pass and never a failure: throttle
+# outbound so it mostly does not happen, and retry with backoff the ones that do. Raise
+# `compute_units_per_second` for a paid endpoint.
+compute_units_per_second = 100
+fork_retries = 10
+fork_retry_backoff = 2
+
 # The examples read `config/<chainId>.json` from the repo root so that not one address is
 # inlined in a .sol file. Foundry sandboxes the filesystem, so the directory has to be declared.
 fs_permissions = [{ access = "read", path = "../config" }]

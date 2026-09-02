@@ -9,8 +9,8 @@
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { encodeFunctionData } from 'viem';
-import { config, deadline, fmt, pool, token, type Address } from '../../src/config.ts';
-import { POOL_ABI, account, armed, balanceOf, publicClient, send } from '../../src/viem-client.ts';
+import { config, deadline, diffBps, fmt, impliedWad, pool, token, type Address } from '../../src/config.ts';
+import { POOL_ABI, account, armed, balanceOf, decimalsOf, publicClient, send } from '../../src/viem-client.ts';
 import * as sdkSwap from '../../sdk/03-pool-swap.ts';
 import * as rpcSwap from '../../rpc/03-pool-swap.ts';
 import * as sdkRouter from '../../sdk/02-router-swap.ts';
@@ -21,8 +21,14 @@ const USDCB = token(config.baseToken);
 const USDT = token('USDT');
 const USDS = token('USDS');
 const WETH = token('WETH');
+const EURC = token('EURC');
+const JPYC = token('JPYC');
+const NVDA = token('NVDA');
+const TSLA = token('TSLA');
 const stable = pool('stablePool');
 const crypto = pool('cryptoPool');
+const fx = pool('fxPool');
+const stocks = pool('stocksPool');
 const ONE_K = 1_000n * 10n ** 18n;
 
 let me: Address;
@@ -187,5 +193,85 @@ describe('example 2: multi-hop, multi-part route through the Router', () => {
     await expect(send([sdkRouter.routerCall(parts, floors, me)])).rejects.toThrow();
     // A reverted route leaves the input intact.
     expect(await balanceOf(USDT, me)).toBe(held);
+  }, 120_000);
+});
+
+describe('example 3 on the FX pool: a 6-decimal leg and a sub-unit price', () => {
+  // EURC is 6 decimals against USDCB's 18. Everything below normalises before it compares, and
+  // the floor is derived from the quote rather than from the input amount, which is the only way
+  // a floor means anything across a decimals boundary.
+  test('USDCB to EURC fills at or above the floor', async () => {
+    await deal(USDCB, me, ONE_K * 10n);
+    const decOut = await decimalsOf(EURC);
+    expect(decOut).toBe(6);
+    const before = await balanceOf(EURC, me);
+
+    const { q, minAmountOut, calls } = await sdkSwap.swapCalls(fx, USDCB, EURC, ONE_K, 50, me);
+    await send(calls);
+
+    const got = (await balanceOf(EURC, me)) - before;
+    expect(got).toBeGreaterThanOrEqual(minAmountOut);
+    expect(got).toBeGreaterThan(0n);
+    // Normalised, the fill sits within 2% of the pool mark. Compared raw it would be out by 1e12,
+    // and a test that only asserted `got > 0` would never notice.
+    const implied = impliedWad(ONE_K, 18, got, decOut);
+    expect(diffBps(implied, q.markPrice)).toBeLessThan(200);
+    console.log(`    filled ${fmt(got, decOut)} EURC for ${fmt(ONE_K)} USDCB`);
+  }, 120_000);
+
+  test('USDCB to JPYC fills a six-figure token amount for a four-figure input', async () => {
+    await deal(USDCB, me, ONE_K * 10n);
+    const decOut = await decimalsOf(JPYC);
+    const before = await balanceOf(JPYC, me);
+
+    const { q, minAmountOut, calls } = await rpcSwap.swapCalls(fx, USDCB, JPYC, ONE_K, 50, me);
+    await send(calls);
+
+    const got = (await balanceOf(JPYC, me)) - before;
+    expect(got).toBeGreaterThanOrEqual(minAmountOut);
+    // ~159k JPYC out of 1k USDCB in: the output is two orders of magnitude ABOVE the input, which
+    // is exactly the direction a naive slippage helper written for stables gets wrong.
+    expect(got).toBeGreaterThan(ONE_K * 100n);
+    const implied = impliedWad(ONE_K, 18, got, decOut);
+    expect(diffBps(implied, q.markPrice)).toBeLessThan(200);
+    console.log(`    filled ${fmt(got, decOut)} JPYC for ${fmt(ONE_K)} USDCB`);
+  }, 120_000);
+});
+
+describe('example 3 on the stocks pool: tokenised equities', () => {
+  test('USDCB to NVDA fills at or above the floor', async () => {
+    await deal(USDCB, me, ONE_K * 10n);
+    const decOut = await decimalsOf(NVDA);
+    const before = await balanceOf(NVDA, me);
+
+    const { q, minAmountOut, calls } = await sdkSwap.swapCalls(stocks, USDCB, NVDA, ONE_K, 100, me);
+    await send(calls);
+
+    const got = (await balanceOf(NVDA, me)) - before;
+    expect(got).toBeGreaterThanOrEqual(minAmountOut);
+    // A share is worth hundreds of dollars, so 1000 USDCB buys single-digit units. The output is
+    // two orders of magnitude BELOW the input; asserting "out >= in * something" fails here.
+    expect(got).toBeLessThan(ONE_K / 100n);
+    expect(got).toBeGreaterThan(0n);
+    const implied = impliedWad(ONE_K, 18, got, decOut);
+    expect(diffBps(implied, q.markPrice)).toBeLessThan(200);
+    console.log(`    filled ${fmt(got, decOut)} NVDA for ${fmt(ONE_K)} USDCB`);
+  }, 120_000);
+
+  test('equity to equity is one call and never pays the intermediate out', async () => {
+    await deal(NVDA, me, 10n * 10n ** 18n);
+    const usdcbBefore = await balanceOf(USDCB, me);
+    const before = await balanceOf(TSLA, me);
+    const amountIn = 10n ** 18n; // 1 NVDA
+
+    const { q, minAmountOut, calls } = await rpcSwap.swapCalls(stocks, NVDA, TSLA, amountIn, 100, me);
+    expect(q.routeHops.length).toBe(3); // NVDA -> USDCB -> TSLA, inside one pool call
+    await send(calls);
+
+    const got = (await balanceOf(TSLA, me)) - before;
+    expect(got).toBeGreaterThanOrEqual(minAmountOut);
+    // The pool base is consumed inside the hop: it must never land on the recipient.
+    expect(await balanceOf(USDCB, me)).toBe(usdcbBefore);
+    console.log(`    filled ${fmt(got)} TSLA for ${fmt(amountIn)} NVDA`);
   }, 120_000);
 });
