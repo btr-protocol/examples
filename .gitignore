@@ -1,0 +1,6 @@
+node_modules/
+foundry/out/
+foundry/cache/
+foundry/broadcast/
+.env
+*.log
