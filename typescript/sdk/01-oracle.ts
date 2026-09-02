@@ -13,9 +13,12 @@
  * Run: bun run sdk/01-oracle.ts
  */
 import { createHttpProvider, readContract } from '@btr-protocol/sdk/eth';
-import { EXTERNAL_ORACLE_V2_ABI } from '@btr-protocol/sdk/abis';
+import { EXTERNAL_ORACLE_V4_ABI } from '@btr-protocol/sdk/abis';
 import { observedAtSecs, type FeedDataV2 } from '@btr-protocol/sdk/oracle';
-import { config, feedId, fmt, rpcUrl, withRetry, type Address, type Hex } from '../src/config.ts';
+import {
+  config, feedId, fmt, followsUsEquityCalendar, rpcUrl, usMarketOpen, withRetry,
+  type Address, type Hex,
+} from '../src/config.ts';
 
 /** Your risk appetite, not the protocol's. `ttlSecs` is the outer bound; this is tighter. */
 export interface Gate {
@@ -37,7 +40,7 @@ const provider = createHttpProvider(rpcUrl);
 /** Raw read. Note the bigint fields: the SDK does not narrow them, and neither should you. */
 export async function getFeed(oracle: Address, id: Hex): Promise<FeedDataV2> {
   return withRetry(() =>
-    readContract<FeedDataV2>(provider, oracle, EXTERNAL_ORACLE_V2_ABI, 'getFeed', [id]),
+    readContract<FeedDataV2>(provider, oracle, EXTERNAL_ORACLE_V4_ABI, 'getFeed', [id]),
   );
 }
 
@@ -102,24 +105,80 @@ export function conservativeValue1e18(mark1e18: bigint, confidenceBps: number, a
   return (amount * mark1e18 * (10_000n - haircutBps)) / 10_000n / 10n ** 18n;
 }
 
+/**
+ * `live` | `closed` | `incident` - and the difference between the last two is the whole point.
+ *
+ * A feed is stale when nothing has marked it recently. For WETH, EURC or JPYC that is always an
+ * incident: crypto and FX trade continuously, so silence means the pipe broke. For NVDA, ASML or
+ * TSLA it is usually a CLOSED MARKET. The US cash session is about 30% of the week, and the keeper
+ * deliberately does not heartbeat a frozen record, because republishing a dead price on a clock is
+ * worse than saying nothing.
+ *
+ * Page on `incident` only. An equity monitor that pages on staleness pages every weekend, and an
+ * alert that fires every weekend is one nobody reads by the third month.
+ */
+export type Verdict = 'live' | 'closed' | 'incident';
+
+export interface Status {
+  verdict: Verdict;
+  /** Zero is the stale sentinel, so this is only a price when `verdict` is `live`. */
+  mark1e18: bigint;
+  ageSecs: number;
+  ttlSecs: number;
+  /** Whether a human should be woken. `closed` never wakes anyone. */
+  page: boolean;
+}
+
+export async function classify(symbol: string, nowSecs = Date.now() / 1000): Promise<Status> {
+  const f = await getFeed(config.contracts.oracle, feedId(symbol));
+  const seen = observedAtSecs({
+    sourceTsMs: Number(f.sourceTsMs),
+    updatedAtSecs: Number(f.updatedAtSecs),
+  });
+  const ageSecs = Math.floor(nowSecs) - seen;
+  const ttlSecs = Number(f.ttlSecs);
+  const base = { mark1e18: f.mark1e18, ageSecs, ttlSecs };
+
+  // A pause is an incident in every timezone, and so is a registered feed that never got a mark.
+  if (Number(f.flags) & 1) return { ...base, verdict: 'incident', page: true };
+  if (f.mark1e18 === 0n) return { ...base, verdict: 'incident', page: true };
+  if (ageSecs <= ttlSecs) return { ...base, verdict: 'live', page: false };
+
+  // Stale. ONLY NOW does the calendar matter.
+  const closed = followsUsEquityCalendar(symbol) && !usMarketOpen();
+  return { ...base, verdict: closed ? 'closed' : 'incident', page: !closed };
+}
+
 if (import.meta.main) {
-  const symbols = ['WETH', 'WBTC', 'EURC', 'USDT'];
+  // Six feeds, three asset classes, because the classes do not behave the same way. FX carries a
+  // 3600s ttl; equities and crypto carry 600s. JPYC's mark is ~0.0063 WAD and ASML's is ~1657 WAD,
+  // six orders of magnitude apart in the SAME uint256, which is why nothing here rounds to a
+  // whole number anywhere.
+  const symbols = ['EURC', 'JPYC', 'NVDA', 'ASML', 'TSLA', 'WETH'];
   console.log(`${config.name} (chain ${config.chainId})`);
   console.log(`primary   ${config.contracts.oracle}`);
   console.log(`reference ${config.contracts.refOracle}\n`);
 
   for (const s of symbols) {
+    const st = await classify(s);
     const id = feedId(s);
     const raw = await getFeed(config.contracts.oracle, id);
+    const head =
+      `${s.padEnd(6)} ${st.verdict.padEnd(8)} ttl=${String(st.ttlSecs).padStart(4)}s` +
+      ` age=${String(st.ageSecs).padStart(6)}s page=${st.page ? 'YES' : 'no '}`;
     try {
       const agreed = await readAgreedMark(id);
       console.log(
-        `${s.padEnd(6)} mark=${fmt(agreed.mark1e18).padStart(18)}  age=${String(agreed.ageSecs).padStart(4)}s` +
+        `${head}  mark=${fmt(agreed.mark1e18).padStart(22)}` +
           `  sigma=${agreed.sigmaPbps}pbps  conf=${raw.confidenceBps}bps  tierDiff=${agreed.divergenceBps}bps`,
       );
     } catch (e) {
       // A rejection is the correct outcome, not a crash. Print it and carry on.
-      console.log(`${s.padEnd(6)} REJECTED: ${(e as Error).message}`);
+      console.log(`${head}  REJECTED: ${(e as Error).message}`);
     }
   }
+
+  // ASML has a feed but no listed token in this deployment: the oracle's feed set is a SUPERSET of
+  // what any pool trades. Reading a mark is never evidence that a pair is swappable.
+  console.log(`\nASML feed present: ${'ASML' in config.feeds}, ASML token listed: ${'ASML' in config.tokens}`);
 }
