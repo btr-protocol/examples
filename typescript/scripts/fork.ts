@@ -1,0 +1,58 @@
+#!/usr/bin/env bun
+/**
+ * Boot an anvil fork of the configured chain, run the state-changing test suite against it, tear
+ * it down.
+ *
+ * WHY A FORK. The write examples move tokens. Running them against the live chain needs a funded
+ * key, is not reproducible, and leaves state behind for the next reader. A fork gives real
+ * contracts, real oracle marks, real pool inventories, a prefunded account, and a clean slate
+ * every run.
+ *
+ * Usage: bun run test:fork
+ */
+import { loadConfig } from '../src/config.ts';
+
+const cfg = loadConfig();
+const port = Number(process.env.ANVIL_PORT ?? 8545);
+const forkUrl = process.env.BTR_FORK_URL ?? cfg.rpcUrl;
+const rpc = `http://127.0.0.1:${port}`;
+
+/** anvil's first well-known development key. Public, worthless, and the point: no real key is
+ *  needed to exercise any of this. NEVER reuse it anywhere that holds value. */
+const ANVIL_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
+
+const anvil = Bun.spawn(
+  ['anvil', '--fork-url', forkUrl, '--port', String(port), '--silent', '--chain-id', String(cfg.chainId)],
+  { stdout: 'pipe', stderr: 'pipe' },
+);
+
+async function ready(timeoutMs = 60_000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const r = await fetch(rpc, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }),
+      });
+      if (r.ok) return;
+    } catch {
+      // anvil not listening yet
+    }
+    await Bun.sleep(250);
+  }
+  throw new Error('anvil did not come up');
+}
+
+try {
+  await ready();
+  console.log(`anvil forking ${forkUrl} at ${rpc}\n`);
+  const test = Bun.spawn(['bun', 'test', 'test/fork', ...Bun.argv.slice(2)], {
+    env: { ...process.env, BTR_RPC_URL: rpc, BTR_PRIVATE_KEY: ANVIL_KEY },
+    stdout: 'inherit',
+    stderr: 'inherit',
+  });
+  process.exit(await test.exited);
+} finally {
+  anvil.kill();
+}
