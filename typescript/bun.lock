@@ -17,7 +17,7 @@
   "packages": {
     "@adraffy/ens-normalize": ["@adraffy/ens-normalize@1.11.1", "", {}, "sha512-nhCBV3quEgesuf7c7KYfperqSS14T8bYuvJ8PcLJp6znkZpFc0AuW4qBtr8eKVyPPe/8RSr7sglCWPU5eaxwKQ=="],
 
-    "@btr-protocol/sdk": ["@btr-protocol/sdk@github:btr-protocol/sdk#add19e1", { "dependencies": { "@noble/curves": "^2.3.0", "@noble/hashes": "^2.3.0" } }, "btr-protocol-sdk-add19e1", "sha512-iaEZwV78xzSHDdikF+/yH7OlUbC65r3aGt5HsQsB8B9bLXlpCI64lke9FsBEj23eFGX/uVoZ+g2ei3C6JIzt+Q=="],
+    "@btr-protocol/sdk": ["@btr-protocol/sdk@github:btr-protocol/sdk#929d340", { "dependencies": { "@noble/curves": "^2.3.0", "@noble/hashes": "^2.3.0" } }, "btr-protocol-sdk-929d340", "sha512-rUdebr2RKh2k19MA5Rh2jSLrSqhB4EK+wxxdg/Q5rz3PUcSDxZS5U1dO9AmSGl4LIghYvYGUvDSbz4Uv4p9lsQ=="],
 
     "@noble/ciphers": ["@noble/ciphers@1.3.0", "", {}, "sha512-2I0gnIVPtfnMw9ee9h1dJG7tp81+8Ob3OJb3Mv37rx5L40/b0i7djjCVvGOVqc9AEIQyvyu1i6ypKdFw8R8gQw=="],
 
