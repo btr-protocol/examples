@@ -4,3 +4,14 @@ foundry/cache/
 foundry/broadcast/
 .env
 *.log
+
+# Secrets hygiene
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+create3-salts*.json
+*.kubeconfig
+kubeconfig*
