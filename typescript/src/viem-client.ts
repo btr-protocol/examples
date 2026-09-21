@@ -29,7 +29,7 @@ export const armed = walletClient !== null;
 
 /** The whole read surface a consumer needs, as text. Copy the lines you call. */
 export const ORACLE_ABI = parseAbi([
-  'struct FeedData { uint256 mark1e18; uint32 sigmaPbps; uint32 updatedAtSecs; uint16 ttlSecs; uint16 confidenceBps; uint16 flags; uint16 maxDeviationBps; uint48 sourceTsMs; }',
+  'struct FeedData { uint256 mark1e18; uint32 sigmaPbps; uint32 updatedAtSecs; uint16 ttlSecs; uint16 confidenceBps; uint16 flags; uint16 maxDevBps; uint48 sourceTsMs; }',
   'function getFeed(bytes32 feedId) view returns (FeedData)',
   'function isFeedFresh(bytes32 feedId) view returns (bool)',
   'function isFeedFresh(bytes32 feedId, uint32 maxAge) view returns (bool)',

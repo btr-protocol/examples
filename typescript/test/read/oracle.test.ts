@@ -43,13 +43,13 @@ describe('oracle, SDK surface', () => {
   }, 60_000);
 
   test('a paused feed is rejected, not returned', () => {
-    const paused = { mark1e18: 1n, sigmaPbps: 0n, updatedAtSecs: 0n, ttlSecs: 600n, confidenceBps: 0n, flags: 1n, maxDeviationBps: 0n, sourceTsMs: 0n };
+    const paused = { mark1e18: 1n, sigmaPbps: 0n, updatedAtSecs: 0n, ttlSecs: 600n, confidenceBps: 0n, flags: 1n, maxDevBps: 0n, sourceTsMs: 0n };
     // biome-ignore lint/suspicious/noExplicitAny: constructing a FeedDataV2 by hand for the test
     expect(() => sdk.gate(paused as any, '0x00' as never)).toThrow(sdk.FeedRejected);
   });
 
   test('the zero-mark sentinel is rejected, not divided by', () => {
-    const unpushed = { mark1e18: 0n, sigmaPbps: 0n, updatedAtSecs: 0n, ttlSecs: 600n, confidenceBps: 0n, flags: 0n, maxDeviationBps: 0n, sourceTsMs: 0n };
+    const unpushed = { mark1e18: 0n, sigmaPbps: 0n, updatedAtSecs: 0n, ttlSecs: 600n, confidenceBps: 0n, flags: 0n, maxDevBps: 0n, sourceTsMs: 0n };
     // biome-ignore lint/suspicious/noExplicitAny: same
     expect(() => sdk.gate(unpushed as any, '0x00' as never)).toThrow(sdk.FeedRejected);
   });

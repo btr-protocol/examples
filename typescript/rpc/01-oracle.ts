@@ -27,7 +27,7 @@ export interface Feed {
   ttlSecs: number;
   confidenceBps: number;
   flags: number;
-  maxDeviationBps: number;
+  maxDevBps: number;
   /** uint48: viem decodes it as a `number`, the SDK as a `bigint`. Normalise before comparing. */
   sourceTsMs: number | bigint;
 }

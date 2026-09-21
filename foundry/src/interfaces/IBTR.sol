@@ -41,7 +41,7 @@ interface IOracle {
     /// @dev Feed bits. Bit 0 = paused.
     uint16 flags;
     /// @dev Single-push deviation bound, bps.
-    uint16 maxDeviationBps;
+    uint16 maxDevBps;
     /// @dev Signer-attested source time, milliseconds. 0 when the feed is unsigned.
     uint48 sourceTsMs;
   }
