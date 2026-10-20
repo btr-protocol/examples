@@ -39,7 +39,7 @@ export const ORACLE_ABI = parseAbi([
 export const POOL_ABI = parseAbi([
   'struct SwapQuote { uint256 amountOut; uint256 amountIn; uint16 spreadPbps; uint256 protoFee; uint256 lpFee; int8 skewIn; int8 skewOut; uint256 markPrice; uint256 midPrice; uint256 covToll; address[] routeHops; uint256[] hopAmounts; uint256[] hopPrices; }',
   'struct DepositResult { uint256 lpAmount; uint256 actualDeposit; uint256 deadLp; }',
-  'struct WithdrawResult { uint256 amountOut; uint256 lpBurned; }',
+  'struct WithdrawResult { uint256 amountOut; }',
   'function getSwapQuote(address tokenIn, address tokenOut, uint256 amountIn) view returns (SwapQuote)',
   'function swap(address tokenIn, address tokenOut, uint256 amountIn, uint256 minAmountOut, address recipient, uint256 deadline) payable returns (uint256)',
   'function deposit(address token, uint256 amount) payable returns (DepositResult)',

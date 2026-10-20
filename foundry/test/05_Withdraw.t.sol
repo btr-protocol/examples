@@ -67,13 +67,12 @@ contract WithdrawTest is BTRForkTest {
     IPool.WithdrawResult memory r =
       stablePool.withdraw(USDT, shares, minOut, block.timestamp + 600);
 
-    assertEq(r.lpBurned, shares, "the whole position should have been burned");
     assertEq(r.amountOut, IERC20(USDT).balanceOf(alice) - before, "receipt must match what arrived");
     assertGe(r.amountOut, minOut);
     assertEq(r.amountOut, preview, "preview and fill must agree on a still market");
     assertEq(stablePool.getLPBalance(alice, USDT), 0);
 
-    emit log_named_uint("shares burned", r.lpBurned);
+    emit log_named_uint("shares in    ", shares);
     emit log_named_uint("USDT out     ", r.amountOut);
     emit log_named_uint("haircut      ", haircut);
   }

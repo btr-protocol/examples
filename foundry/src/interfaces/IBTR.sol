@@ -88,7 +88,6 @@ interface IPool {
 
   struct WithdrawResult {
     uint256 amountOut;
-    uint256 lpBurned;
   }
 
   function swap(
