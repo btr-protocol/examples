@@ -83,6 +83,9 @@ export BTR_CHAIN_ID=5042002   # required: a file name in config/
 cd foundry && BTR_RPC_URL=<endpoint> forge test -vv --rpc-url <endpoint> \
   --compute-units-per-second 100 --fork-retries 10
 
+# TypeScript typecheck (no emit; the examples run straight from source).
+cd typescript && bun run typecheck
+
 # TypeScript, read-only, against the live chain. No key, no state change.
 cd typescript && bun test test/read
 
