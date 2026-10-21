@@ -90,7 +90,7 @@ interface IPool {
     uint256 amountOut;
   }
 
-  function swap(
+  function swap_qe(
     address tokenIn,
     address tokenOut,
     uint256 amountIn,

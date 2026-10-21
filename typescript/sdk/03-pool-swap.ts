@@ -5,10 +5,10 @@
  * Twin:     ../rpc/03-pool-swap.ts     (same job, viem only, no SDK)
  * On chain: ../../foundry/test/03_PoolSwap.t.sol
  *
- * WHY THIS ONE. `getSwapQuote` and `swap` are first-class SDK calls: the quote comes back as a
- * typed `SwapQuote` with `markPrice`, `midPrice`, `spreadPbps` and `covToll` already named, and
- * the ABI is the deployed one rather than a hand-copied fragment. Pick it when you want the
- * pool's own analytics along with the fill.
+ * WHY THIS ONE. `getSwapQuote` is a first-class SDK call: the quote comes back as a typed
+ * `SwapQuote` with `markPrice`, `midPrice`, `spreadPbps` and `covToll` already named, and
+ * `POOL_ABI` is the deployed one (the swap entry point is `swap_qe`) rather than a hand-copied
+ * fragment. Pick it when you want the pool's own analytics along with the fill.
  *
  * Run:  bun run sdk/03-pool-swap.ts          (dry run: prints calldata)
  *       BTR_PRIVATE_KEY=0x.. BTR_RPC_URL=http://127.0.0.1:8545 bun run sdk/03-pool-swap.ts
@@ -42,7 +42,7 @@ export async function swapCalls(
     minAmountOut,
     calls: [
       approve(tokenIn, p, amountIn),
-      call(p, POOL_ABI, 'swap', [tokenIn, tokenOut, amountIn, minAmountOut, recipient, deadline()], 'swap'),
+      call(p, POOL_ABI, 'swap_qe', [tokenIn, tokenOut, amountIn, minAmountOut, recipient, deadline()], 'swap'),
     ],
   };
 }

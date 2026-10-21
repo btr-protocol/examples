@@ -106,7 +106,7 @@ describe('example 3: swap directly against one pool', () => {
     // behaviour rather than about a gas estimate.
     await expect(
       publicClient.simulateContract({
-        address: stable, abi: POOL_ABI, functionName: 'swap',
+        address: stable, abi: POOL_ABI, functionName: 'swap_qe',
         args: [USDCB, USDT, ONE_K, q.amountOut * 2n, me, deadline()], account: me,
       }),
     ).rejects.toThrow();
@@ -116,7 +116,7 @@ describe('example 3: swap directly against one pool', () => {
     await send([{
       to: stable,
       data: encodeFunctionData({
-        abi: POOL_ABI, functionName: 'swap',
+        abi: POOL_ABI, functionName: 'swap_qe',
         args: [USDCB, USDT, ONE_K, (q.amountOut * 99n) / 100n, me, deadline()],
       }),
       label: 'swap',

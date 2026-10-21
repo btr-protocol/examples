@@ -219,7 +219,7 @@ contract RouterSwapTest is BTRForkTest {
     IERC20(USDT).approve(address(stablePool), type(uint256).max);
     vm.prank(alice);
     g0 = gasleft();
-    stablePool.swap(USDT, USDCB, amountIn, 0, alice, block.timestamp + 600);
+    stablePool.swap_qe(USDT, USDCB, amountIn, 0, alice, block.timestamp + 600);
     uint256 direct = g0 - gasleft();
 
     emit log_named_uint("gas via router", viaRouter);

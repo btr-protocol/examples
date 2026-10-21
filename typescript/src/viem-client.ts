@@ -41,7 +41,7 @@ export const POOL_ABI = parseAbi([
   'struct DepositResult { uint256 lpAmount; uint256 actualDeposit; uint256 deadLp; }',
   'struct WithdrawResult { uint256 amountOut; }',
   'function getSwapQuote(address tokenIn, address tokenOut, uint256 amountIn) view returns (SwapQuote)',
-  'function swap(address tokenIn, address tokenOut, uint256 amountIn, uint256 minAmountOut, address recipient, uint256 deadline) payable returns (uint256)',
+  'function swap_qe(address tokenIn, address tokenOut, uint256 amountIn, uint256 minAmountOut, address recipient, uint256 deadline) payable returns (uint256)',
   'function deposit(address token, uint256 amount) payable returns (DepositResult)',
   'function withdraw(address token, uint256 lpAmount, uint256 minAmountOut, uint256 deadline) returns (WithdrawResult)',
   'function swapLiability(address tokenIn, address tokenOut, uint256 lpAmountIn, uint256 minLpAmountOut, uint256 deadline) returns (uint256)',

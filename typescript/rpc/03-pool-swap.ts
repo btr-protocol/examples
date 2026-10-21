@@ -49,7 +49,7 @@ export async function swapCalls(
       // is not optional and why this cannot be batched through Multicall3: under Multicall3 the
       // `msg.sender` the pool sees is the multicall contract, not the user.
       data: encodeFunctionData({
-        abi: POOL_ABI, functionName: 'swap',
+        abi: POOL_ABI, functionName: 'swap_qe',
         args: [tokenIn, tokenOut, amountIn, minAmountOut, recipient, deadline()],
       }),
       label: 'swap',

@@ -36,7 +36,7 @@ contract PoolSwapTest is BTRForkTest {
 
     uint256 before = IERC20(USDT).balanceOf(alice);
     vm.prank(alice);
-    uint256 out = stablePool.swap(USDCB, USDT, amountIn, minOut, alice, block.timestamp + 600);
+    uint256 out = stablePool.swap_qe(USDCB, USDT, amountIn, minOut, alice, block.timestamp + 600);
 
     assertEq(out, IERC20(USDT).balanceOf(alice) - before, "return value must equal what arrived");
     assertGe(out, minOut, "below the floor the pool accepted");
@@ -58,7 +58,7 @@ contract PoolSwapTest is BTRForkTest {
 
     IPool.SwapQuote memory q = stablePool.getSwapQuote(USDCB, USDS, amountIn);
     vm.prank(alice);
-    uint256 out = stablePool.swap(USDCB, USDS, amountIn, 0, alice, block.timestamp + 600);
+    uint256 out = stablePool.swap_qe(USDCB, USDS, amountIn, 0, alice, block.timestamp + 600);
 
     assertEq(out, q.amountOut, "getSwapQuote and swap must agree on a still market");
   }
@@ -73,7 +73,7 @@ contract PoolSwapTest is BTRForkTest {
     assertEq(q.routeHops[1], stablePool.baseToken(), "the middle hop is the pool base");
 
     vm.prank(alice);
-    uint256 out = stablePool.swap(USDT, USDS, amountIn, q.amountOut, alice, block.timestamp + 600);
+    uint256 out = stablePool.swap_qe(USDT, USDS, amountIn, q.amountOut, alice, block.timestamp + 600);
     assertGe(out, q.amountOut);
   }
 
@@ -86,7 +86,7 @@ contract PoolSwapTest is BTRForkTest {
     IPool.SwapQuote memory q = stablePool.getSwapQuote(USDCB, USDT, amountIn);
     vm.prank(alice);
     vm.expectRevert();
-    stablePool.swap(USDCB, USDT, amountIn, q.amountOut * 2, alice, block.timestamp + 600);
+    stablePool.swap_qe(USDCB, USDT, amountIn, q.amountOut * 2, alice, block.timestamp + 600);
   }
 
   /// An expired deadline reverts before anything moves.
@@ -95,7 +95,7 @@ contract PoolSwapTest is BTRForkTest {
     fund(USDCB, amountIn, address(stablePool));
     vm.prank(alice);
     vm.expectRevert();
-    stablePool.swap(USDCB, USDT, amountIn, 0, alice, block.timestamp - 1);
+    stablePool.swap_qe(USDCB, USDT, amountIn, 0, alice, block.timestamp - 1);
   }
 
   /// Without an approval the pool cannot pull the input. Stated because it is the single most
@@ -105,7 +105,7 @@ contract PoolSwapTest is BTRForkTest {
     deal(USDCB, alice, amountIn, true);
     vm.prank(alice);
     vm.expectRevert();
-    stablePool.swap(USDCB, USDT, amountIn, 0, alice, block.timestamp + 600);
+    stablePool.swap_qe(USDCB, USDT, amountIn, 0, alice, block.timestamp + 600);
   }
 
   /// A cross-asset swap on the crypto pool: stable in, volatile out, priced off the WETH feed.
@@ -118,7 +118,7 @@ contract PoolSwapTest is BTRForkTest {
 
     vm.prank(alice);
     uint256 out =
-      cryptoPool.swap(USDCB, WETH, amountIn, q.amountOut * 995 / 1000, alice, block.timestamp + 600);
+      cryptoPool.swap_qe(USDCB, WETH, amountIn, q.amountOut * 995 / 1000, alice, block.timestamp + 600);
 
     // Implied price must sit within a sane band of the pool's own mark. This catches a decimals
     // mistake, which is the failure mode that otherwise looks like a successful swap.
@@ -149,7 +149,7 @@ contract PoolSwapTest is BTRForkTest {
 
     uint256 minOut = q.amountOut * (10_000 - SLIPPAGE_BPS) / 10_000;
     vm.prank(alice);
-    uint256 out = fxPool.swap(USDCB, EURC, amountIn, minOut, alice, block.timestamp + 600);
+    uint256 out = fxPool.swap_qe(USDCB, EURC, amountIn, minOut, alice, block.timestamp + 600);
 
     assertGe(out, minOut);
     assertLt(diffBps(impliedWad(USDCB, amountIn, EURC, out), q.markPrice), 200, "off the mark");
@@ -170,7 +170,7 @@ contract PoolSwapTest is BTRForkTest {
     uint256 minOut = q.amountOut * (10_000 - SLIPPAGE_BPS) / 10_000;
 
     vm.prank(alice);
-    uint256 out = fxPool.swap(USDCB, JPYC, amountIn, minOut, alice, block.timestamp + 600);
+    uint256 out = fxPool.swap_qe(USDCB, JPYC, amountIn, minOut, alice, block.timestamp + 600);
 
     assertGe(out, minOut);
     assertGt(out, amountIn * 100, "~159k JPYC for 1k USDCB: output dwarfs the input");
@@ -193,7 +193,7 @@ contract PoolSwapTest is BTRForkTest {
 
     uint256 minOut = q.amountOut * (10_000 - SLIPPAGE_BPS) / 10_000;
     vm.prank(alice);
-    uint256 out = stocksPool.swap(USDCB, NVDA, amountIn, minOut, alice, block.timestamp + 600);
+    uint256 out = stocksPool.swap_qe(USDCB, NVDA, amountIn, minOut, alice, block.timestamp + 600);
 
     assertGe(out, minOut);
     assertLt(out, amountIn / 100, "1k USDCB buys single-digit shares");
@@ -215,7 +215,7 @@ contract PoolSwapTest is BTRForkTest {
 
     uint256 minOut = q.amountOut * (10_000 - SLIPPAGE_BPS) / 10_000;
     vm.prank(alice);
-    uint256 out = stocksPool.swap(NVDA, TSLA, amountIn, minOut, alice, block.timestamp + 600);
+    uint256 out = stocksPool.swap_qe(NVDA, TSLA, amountIn, minOut, alice, block.timestamp + 600);
 
     assertGe(out, minOut);
     assertEq(IERC20(USDCB).balanceOf(alice), 0, "the intermediate must never be paid out");
