@@ -9,7 +9,7 @@
  * shares, one call, without leaving the pool.
  *
  * WHAT IT IS NOT: A TRADE. RESERVES DO NOT MOVE. Only the liability side of two legs changes.
- *   - both legs need bit 2 (`LIABILITY_SWAP_ENABLED_BIT`) set in `getRiskFlags`
+ *   - both legs need bit 5 (`LIABILITY_SWAP_ENABLED_BIT`) set in `getRiskFlags`
  *   - an UNDER-COVERED input leg takes a haircut on the way out, and an UNDER-COVERED
  *     destination leg marks the arriving claim down to its coverage: joining a weak leg at
  *     par would be arbing the shortfall at the expense of whoever is already in it
@@ -32,7 +32,7 @@ import { POOL_ABI, armed, publicClient, send, senderOrPlaceholder, type Call } f
 import { lpBalance } from './04-deposit.ts';
 import { flowCooldownSecs, previewWithdraw } from './05-withdraw.ts';
 
-export const LIABILITY_SWAP_ENABLED_BIT = 1 << 2;
+export const LIABILITY_SWAP_ENABLED_BIT = 1 << 5;
 
 export const riskFlags = (p: Address, tk: Address) =>
   withRetry(() => publicClient.readContract({ address: p, abi: POOL_ABI, functionName: 'getRiskFlags', args: [tk] }));

@@ -15,7 +15,7 @@
  *
  * WHAT IT IS NOT: A TRADE. RESERVES DO NOT MOVE. Only the liability side of two legs changes.
  * Consequences you have to encode for:
- *   - both legs need `LIABILITY_SWAP_ENABLED_BIT` (bit 2) in `getRiskFlags`
+ *   - both legs need `LIABILITY_SWAP_ENABLED_BIT` (bit 5) in `getRiskFlags`
  *   - an UNDER-COVERED input leg takes a haircut, so leaving it does not dump the shortfall on
  *     whoever stays; symmetrically, an UNDER-COVERED destination leg marks the arriving
  *     claim down to its coverage, so joining one is not free either
@@ -28,9 +28,9 @@
  *
  * Run: bun run sdk/06-debt-swap.ts
  */
-import { POOL_ABI } from '@btr-protocol/sdk/abis';
+import { LIABILITY_SWAP_ENABLED_BIT, POOL_ABI } from '@btr-protocol/sdk/abis';
 import { readContract } from '@btr-protocol/sdk/eth';
-import { LIABILITY_SWAP_ENABLED_BIT, liabilitySwapEnabled } from '@btr-protocol/sdk/pool';
+import { liabilitySwapEnabled } from '@btr-protocol/sdk/pool';
 import { deadline, fmt, pool, token, withRetry, type Address } from '../src/config.ts';
 import { account, armed, call, provider, send } from '../src/sdk-wallet.ts';
 import { lpBalance } from './04-deposit.ts';

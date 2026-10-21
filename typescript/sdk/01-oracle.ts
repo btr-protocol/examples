@@ -5,7 +5,7 @@
  * Twin:    ../rpc/01-oracle.ts        (same job, viem only, no SDK)
  * On chain: ../../foundry/src/OracleConsumer.sol
  *
- * WHY THIS ONE. The SDK ships the deployed ABIs, a typed `FeedDataV2`, and `observedAtSecs`,
+ * WHY THIS ONE. The SDK ships the deployed ABIs, a typed `FeedData`, and `observedAtSecs`,
  * which is the freshness clock the contracts actually gate on. You get the right answer without
  * having to know that `updatedAtSecs` alone understates age by the relay lag. Pick this when you
  * are already in TypeScript and want the protocol's own semantics rather than your reading of them.
@@ -14,7 +14,7 @@
  */
 import { createHttpProvider, readContract } from '@btr-protocol/sdk/eth';
 import { EXTERNAL_ORACLE_V4_ABI } from '@btr-protocol/sdk/abis';
-import { observedAtSecs, type FeedDataV2 } from '@btr-protocol/sdk/oracle';
+import { observedAtSecs, type FeedData } from '@btr-protocol/sdk/oracle';
 import {
   config, feedId, fmt, followsUsEquityCalendar, rpcUrl, usMarketOpen, withRetry,
   type Address, type Hex,
@@ -38,9 +38,9 @@ export class FeedRejected extends Error {}
 const provider = createHttpProvider(rpcUrl);
 
 /** Raw read. Note the bigint fields: the SDK does not narrow them, and neither should you. */
-export async function getFeed(oracle: Address, id: Hex): Promise<FeedDataV2> {
+export async function getFeed(oracle: Address, id: Hex): Promise<FeedData> {
   return withRetry(() =>
-    readContract<FeedDataV2>(provider, oracle, EXTERNAL_ORACLE_V4_ABI, 'getFeed', [id]),
+    readContract<FeedData>(provider, oracle, EXTERNAL_ORACLE_V4_ABI, 'getFeed', [id]),
   );
 }
 
@@ -55,7 +55,7 @@ export async function getFeed(oracle: Address, id: Hex): Promise<FeedDataV2> {
  *  4. `confidenceBps` is the mark's one-sigma interval. A mark is a distribution, not a number,
  *     and `sigmaPbps` (1e6 = 100%) is the volatility you should be sizing against.
  */
-export function gate(f: FeedDataV2, id: Hex, g: Gate = DEFAULT_GATE, nowSecs = Date.now() / 1000) {
+export function gate(f: FeedData, id: Hex, g: Gate = DEFAULT_GATE, nowSecs = Date.now() / 1000) {
   if (Number(f.flags) & 1) throw new FeedRejected(`feed ${id} is paused (flags & 1)`);
   if (f.mark1e18 === 0n) throw new FeedRejected(`feed ${id} has no mark yet (zero sentinel)`);
 

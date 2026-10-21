@@ -18,7 +18,7 @@ import {IERC20, IPool} from "../src/interfaces/IBTR.sol";
  * liability side of two legs changes. That is why it is cheap, why it does not pay the swap
  * spread, and why it is gated differently:
  *
- *   - both legs need `LIABILITY_SWAP_ENABLED_BIT` (bit 2) in `getRiskFlags`
+ *   - both legs need `LIABILITY_SWAP_ENABLED_BIT` (bit 5) in `getRiskFlags`
  *   - an UNDER-COVERED input leg takes a haircut, because leaving a leg that cannot pay everyone
  *     in full at face value would hand the shortfall to whoever stays; symmetrically, an
  *     UNDER-COVERED destination leg marks the arriving claim down to its coverage, because
@@ -34,7 +34,7 @@ import {IERC20, IPool} from "../src/interfaces/IBTR.sol";
  * Run: forge test --match-path 'test/06_*' -vv
  */
 contract DebtSwapTest is BTRForkTest {
-  uint16 constant LIABILITY_SWAP_ENABLED_BIT = 1 << 2;
+  uint16 constant LIABILITY_SWAP_ENABLED_BIT = 1 << 5;
 
   /// @dev Deposit USDT and hand back shares that are actually swappable.
   ///

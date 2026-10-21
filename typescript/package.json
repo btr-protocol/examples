@@ -10,11 +10,14 @@
     "test:fork": "bun scripts/fork.ts"
   },
   "dependencies": {
-    "@btr-protocol/sdk": "github:btr-protocol/sdk",
+    "@btr-protocol/sdk": "github:btr-protocol/sdk#b0ad54b001cf40e9177b4b10c0a063bc507e85a5",
     "viem": "^2.21.0"
   },
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^5.6.0"
-  }
+  },
+  "trustedDependencies": [
+    "@btr-protocol/sdk"
+  ]
 }
