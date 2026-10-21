@@ -5,12 +5,13 @@
   "type": "module",
   "description": "Runnable BTR integration examples: oracle, router, pool swap, deposit, withdraw, debt swap",
   "scripts": {
+    "typecheck": "tsc --noEmit",
     "test": "bun run test:read && bun run test:fork",
     "test:read": "bun test test/read",
     "test:fork": "bun scripts/fork.ts"
   },
   "dependencies": {
-    "@btr-protocol/sdk": "github:btr-protocol/sdk#b0ad54b001cf40e9177b4b10c0a063bc507e85a5",
+    "@btr-protocol/sdk": "github:btr-protocol/sdk#de079a68daaa408c112fc606585306488ebb9d13",
     "viem": "^2.21.0"
   },
   "devDependencies": {
