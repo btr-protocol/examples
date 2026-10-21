@@ -81,6 +81,28 @@ interface IPool {
     uint256[] hopPrices;
   }
 
+  /// @notice One listed leg, as `getAsset` returns it. Only `liquidityIndexWad` (face per share,
+  ///         WAD) is read by the examples; the rest is declared because an ABI decoder needs it.
+  struct Asset {
+    uint128 reserves;
+    uint128 liabilities;
+    address anchor;
+    uint96 minLiquidity;
+    uint72 liquidityIndexWad;
+    uint32 minDispersionPbps;
+    uint16 curveId;
+    uint16 minFeePbps;
+    uint16 vegaBps;
+    uint16 depositCapCode;
+    uint8 decimals;
+    uint8 deadSeedPow10;
+    uint16 flags;
+    uint16 kappaCovBps;
+    uint16 maxLiabWeightBps;
+    uint8 oracleBits;
+    uint16 refBandBps;
+  }
+
   struct DepositResult {
     uint256 lpAmount;
     uint256 actualDeposit;
@@ -140,6 +162,13 @@ interface IPool {
   function maxRedeem(address owner, address tk) external view returns (uint256);
   function baseToken() external view returns (address);
   function getCoverageRatio(address tk) external view returns (uint256);
+
+  function getAsset(address tk) external view returns (Asset memory);
+
+  /// @notice The pool-wide solvency C = sum(reserves * mark) / sum(liabilities * mark), WAD. It is
+  ///         the rate every mint and every cross conversion settles at. `ok` is false while a
+  ///         leg's mark is unusable.
+  function poolSolvencyWad() external view returns (uint256 cWad, bool ok);
   function getRiskFlags(address tk) external view returns (uint16);
 }
 

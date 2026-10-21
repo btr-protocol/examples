@@ -5,14 +5,15 @@
  * Twin:     ../sdk/06-debt-swap.ts     (same job, using @btr-protocol/sdk)
  * On chain: ../../foundry/test/06_DebtSwap.t.sol
  *
- * WHAT IT IS. An LP re-denominating a claim from one leg to another: burn USDT shares, mint USDS
- * shares, one call, without leaving the pool.
+ * WHAT IT IS. An LP re-denominating a claim from one leg to another: burn shares of one leg, mint
+ * shares of another, one call, without leaving the pool.
  *
  * WHAT IT IS NOT: A TRADE. RESERVES DO NOT MOVE. Only the liability side of two legs changes.
  *   - both legs need bit 5 (`LIABILITY_SWAP_ENABLED_BIT`) set in `getRiskFlags`
- *   - an UNDER-COVERED input leg takes a haircut on the way out, and an UNDER-COVERED
- *     destination leg marks the arriving claim down to its coverage: joining a weak leg at
- *     par would be arbing the shortfall at the expense of whoever is already in it
+ *   - it settles at the pool-wide solvency C (`poolSolvencyWad`), the rate a deposit mints at:
+ *     the FACE crosses at the two legs' mark ratio less the swap spread, and there is no per-leg
+ *     haircut. What a share of a leg is WORTH on exit is `face * min(coverage(leg), C)`, so the
+ *     value moves by that ratio between the legs
  *   - BOTH amounts are LP SHARES, not token units. `minLpAmountOut` is a SHARE floor, and shares
  *     are NOT comparable across legs: the two legs carry different liquidity indexes. Compare
  *     VALUE with `previewWithdraw` on each side.
@@ -27,7 +28,7 @@
  * Run: bun run rpc/06-debt-swap.ts
  */
 import { encodeFunctionData } from 'viem';
-import { deadline, fmt, pool, token, withRetry, type Address } from '../src/config.ts';
+import { deadline, demoPair, fmt, need, withRetry, type Address } from '../src/config.ts';
 import { POOL_ABI, armed, publicClient, send, senderOrPlaceholder, type Call } from '../src/viem-client.ts';
 import { lpBalance } from './04-deposit.ts';
 import { flowCooldownSecs, previewWithdraw } from './05-withdraw.ts';
@@ -70,18 +71,19 @@ export const debtSwapCall = (
 });
 
 if (import.meta.main) {
-  const p = pool('stablePool');
-  const from = token('USDT');
-  const to = token('USDS');
+  const [a, b] = need(demoPair(), 'pool with two non-base legs');
+  const p = a.pool;
+  const from = a.token;
+  const to = b.token;
   const user = senderOrPlaceholder;
 
   await assertLegsEnabled(p, from, to);
   console.log(`pool        ${p}`);
-  console.log('legs        USDT -> USDS, both liability-swap enabled');
+  console.log(`legs        ${a.symbol} -> ${b.symbol}, both liability-swap enabled`);
   console.log(`cooldown    ${await flowCooldownSecs(p)}s   (shares minted inside it cannot be re-denominated)`);
 
   const shares = await lpBalance(p, user, from);
-  console.log(`lp balance  ${fmt(shares)} USDT shares`);
+  console.log(`lp balance  ${fmt(shares)} ${a.symbol} shares`);
   if (shares === 0n) {
     console.log('nothing to re-denominate. Run rpc/04-deposit.ts first (against a fork).');
     process.exit(0);
@@ -101,13 +103,13 @@ if (import.meta.main) {
   const [valueOut] = await previewWithdraw(p, to, quoted);
   const minLpAmountOut = (quoted * 9_990n) / 10_000n; // 10 bps, in SHARES
 
-  console.log(`shares out  ${fmt(quoted)} USDS shares  (floor ${fmt(minLpAmountOut)})`);
-  console.log(`value in    ${fmt(valueIn)}`);
-  console.log(`value out   ${fmt(valueOut)}`);
+  console.log(`shares out  ${fmt(quoted)} ${b.symbol} shares  (floor ${fmt(minLpAmountOut)})`);
+  console.log(`value in    ${fmt(valueIn, a.decimals)}`);
+  console.log(`value out   ${fmt(valueOut, b.decimals)}`);
 
   await send([debtSwapCall(p, from, to, shares, minLpAmountOut)]);
   if (armed) {
-    console.log(`\nUSDT shares ${fmt(await lpBalance(p, user, from))}`);
-    console.log(`USDS shares ${fmt(await lpBalance(p, user, to))}`);
+    console.log(`\n${a.symbol} shares ${fmt(await lpBalance(p, user, from))}`);
+    console.log(`${b.symbol} shares ${fmt(await lpBalance(p, user, to))}`);
   }
 }

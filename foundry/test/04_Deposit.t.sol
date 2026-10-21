@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {BTRForkTest} from "./BTRForkTest.sol";
+import {BTRForkTest, PlainToken} from "./BTRForkTest.sol";
 import {IERC20, IPool} from "../src/interfaces/IBTR.sol";
 
 /**
@@ -20,22 +20,32 @@ import {IERC20, IPool} from "../src/interfaces/IBTR.sol";
  * Run: forge test --match-path 'test/04_*' -vv
  */
 contract DepositTest is BTRForkTest {
-  function test_depositMintsShares() public {
-    uint256 amount = units(USDT, 10_000);
-    fund(USDT, amount, address(stablePool));
+  /// @dev A leg `alice` can deposit into, or skip. A gated leg would make every assertion below
+  ///      fail, or revert-test pass, for a reason unrelated to the code under test.
+  function _leg(string memory cls, string memory why) internal returns (Leg memory l) {
+    bool ok;
+    (l, ok) = bytes(cls).length == 0 ? demoLeg() : firstLeg(cls);
+    skipUnless(ok, why);
+    skipIfDepositGated(l);
+  }
 
-    uint256 sharesBefore = stablePool.getLPBalance(alice, USDT);
+  function test_depositMintsShares() public {
+    Leg memory l = _leg("", "no pool holds a non-base leg");
+    uint256 amount = unitsWorth(l.sym, 10_000);
+    fund(l.token, amount, address(l.pool));
+
+    uint256 sharesBefore = l.pool.getLPBalance(alice, l.token);
 
     vm.prank(alice);
-    IPool.DepositResult memory r = stablePool.deposit(USDT, amount);
+    IPool.DepositResult memory r = l.pool.deposit(l.token, amount);
 
-    uint256 minted = stablePool.getLPBalance(alice, USDT) - sharesBefore;
+    uint256 minted = l.pool.getLPBalance(alice, l.token) - sharesBefore;
     assertGt(r.lpAmount, 0, "a zero mint is a failure, not a deposit");
     assertEq(r.actualDeposit, amount, "the pool took a different amount than asked");
     assertEq(minted, r.lpAmount - r.deadLp, "receipt balance must match the mint less deadLp");
-    assertEq(IERC20(USDT).balanceOf(alice), 0, "the whole deposit should have been pulled");
+    assertEq(IERC20(l.token).balanceOf(alice), 0, "the whole deposit should have been pulled");
 
-    emit log_named_uint("deposited (USDT)", r.actualDeposit);
+    emit log_named_uint(string.concat("deposited (", l.sym, ")"), r.actualDeposit);
     emit log_named_uint("shares minted   ", r.lpAmount);
     emit log_named_uint("deadLp sunk     ", r.deadLp);
   }
@@ -43,18 +53,22 @@ contract DepositTest is BTRForkTest {
   /// The receipt is a real ERC-20 per leg. `getLPBalance` is a convenience over it, not a
   /// separate ledger, and the distinction matters the moment you want to transfer a position.
   function test_receiptTokenTracksTheBalance() public {
-    uint256 amount = units(USDS, 5_000);
-    fund(USDS, amount, address(stablePool));
+    (, Leg memory l, bool ok) = demoPair();
+    if (!ok) (l, ok) = demoLeg();
+    skipUnless(ok, "no pool holds a non-base leg");
+    skipIfDepositGated(l);
+    uint256 amount = unitsWorth(l.sym, 5_000);
+    fund(l.token, amount, address(l.pool));
 
-    address receipt = stablePool.lpToken(USDS);
+    address receipt = l.pool.lpToken(l.token);
     assertTrue(receipt != address(0), "leg is not listed");
 
     vm.prank(alice);
-    stablePool.deposit(USDS, amount);
+    l.pool.deposit(l.token, amount);
 
     assertEq(
       IERC20(receipt).balanceOf(alice),
-      stablePool.getLPBalance(alice, USDS),
+      l.pool.getLPBalance(alice, l.token),
       "getLPBalance must equal the receipt ERC-20 balance"
     );
   }
@@ -63,13 +77,14 @@ contract DepositTest is BTRForkTest {
   /// the coverage haircut, and reading only the first return is how an integrator books a
   /// position at a value the pool would not actually pay.
   function test_previewRoundTripIsCloseToDeposited() public {
-    uint256 amount = units(USDT, 10_000);
-    fund(USDT, amount, address(stablePool));
+    Leg memory l = _leg("", "no pool holds a non-base leg");
+    uint256 amount = unitsWorth(l.sym, 10_000);
+    fund(l.token, amount, address(l.pool));
 
     vm.prank(alice);
-    IPool.DepositResult memory r = stablePool.deposit(USDT, amount);
+    IPool.DepositResult memory r = l.pool.deposit(l.token, amount);
 
-    (uint256 back, uint256 haircut) = stablePool.previewWithdraw(USDT, r.lpAmount - r.deadLp);
+    (uint256 back, uint256 haircut) = l.pool.previewWithdraw(l.token, r.lpAmount - r.deadLp);
     assertGt(back, 0);
     assertLe(back, amount, "a same-block round trip must never return more than it took");
 
@@ -81,13 +96,14 @@ contract DepositTest is BTRForkTest {
   /// Deposits are additive and the index is shared, so a second deposit at an unchanged index
   /// mints proportionally. Not exactly equal: the index advances with accrued fees.
   function test_secondDepositMintsProportionally() public {
-    uint256 amount = units(USDT, 1_000);
-    fund(USDT, amount * 2, address(stablePool));
+    Leg memory l = _leg("", "no pool holds a non-base leg");
+    uint256 amount = unitsWorth(l.sym, 1_000);
+    fund(l.token, amount * 2, address(l.pool));
 
     vm.prank(alice);
-    IPool.DepositResult memory a = stablePool.deposit(USDT, amount);
+    IPool.DepositResult memory a = l.pool.deposit(l.token, amount);
     vm.prank(alice);
-    IPool.DepositResult memory b = stablePool.deposit(USDT, amount);
+    IPool.DepositResult memory b = l.pool.deposit(l.token, amount);
 
     assertApproxEqRel(b.lpAmount, a.lpAmount, 0.001e18, "equal deposits should mint near-equal shares");
     assertEq(b.deadLp, 0, "deadLp is carved once, when the leg opens");
@@ -95,99 +111,106 @@ contract DepositTest is BTRForkTest {
 
   /// Depositing into a token the pool does not list has to revert, not mint worthless shares.
   function test_unlistedTokenReverts() public {
-    // WETH is on the crypto pool, never listed on the stable pool.
+    Leg memory l = _leg("", "no pool holds a non-base leg");
+    PlainToken stray = new PlainToken();
     uint256 amount = 1e18;
-    deal(WETH, alice, amount, true);
+    stray.mint(alice, amount);
     vm.prank(alice);
-    IERC20(WETH).approve(address(stablePool), type(uint256).max);
+    stray.approve(address(l.pool), type(uint256).max);
     vm.prank(alice);
     vm.expectRevert();
-    stablePool.deposit(WETH, amount);
+    l.pool.deposit(address(stray), amount);
   }
 
-  /// COVERAGE MOVES TOWARD 1.0, NOT UP. A deposit credits reserves AND liabilities by the same
-  /// value, so it dilutes coverage toward parity: it lifts an under-covered leg and it lowers an
-  /// over-covered one. Depositing is not a way to improve a leg's coverage; `donate` is (it adds
-  /// reserves without liabilities). This test asserted "coverage cannot fall" in its first draft
-  /// and failed against the live chain, which is why it is worded the way it is now.
-  function test_depositMovesCoverageTowardParity() public {
-    uint256 amount = units(USDT, 50_000);
-    fund(USDT, amount, address(stablePool));
+  /// COVERAGE MOVES TOWARD THE POOL SOLVENCY C, NOT UP. A deposit mints at C: reserves grow by
+  /// `amount` and liabilities by `amount / C`. So the leg's coverage is dragged toward C: down
+  /// from above it, up from below it. It is not toward 1.0, and depositing is not a way to
+  /// improve a leg's coverage; `donate` is (it adds reserves without liabilities).
+  function test_depositMovesCoverageTowardPoolSolvency() public {
+    Leg memory l = _leg("", "no pool holds a non-base leg");
+    uint256 amount = unitsWorth(l.sym, 50_000);
+    fund(l.token, amount, address(l.pool));
 
-    uint256 before = stablePool.getCoverageRatio(USDT);
+    (uint256 c,) = l.pool.poolSolvencyWad();
+    uint256 before = l.pool.getCoverageRatio(l.token);
     vm.prank(alice);
-    stablePool.deposit(USDT, amount);
-    uint256 afterCov = stablePool.getCoverageRatio(USDT);
+    l.pool.deposit(l.token, amount);
+    uint256 afterCov = l.pool.getCoverageRatio(l.token);
 
     emit log_named_decimal_uint("coverage before", before, 18);
     emit log_named_decimal_uint("coverage after ", afterCov, 18);
+    emit log_named_decimal_uint("pool C         ", c, 18);
 
-    uint256 gapBefore = before > 1e18 ? before - 1e18 : 1e18 - before;
-    uint256 gapAfter = afterCov > 1e18 ? afterCov - 1e18 : 1e18 - afterCov;
-    assertLe(gapAfter, gapBefore, "a deposit must move coverage toward parity, never away from it");
+    assertLe(_gap(afterCov, c), _gap(before, c), "a deposit must move coverage toward C, never away from it");
+  }
+
+  function _gap(uint256 x, uint256 y) private pure returns (uint256) {
+    return x > y ? x - y : y - x;
   }
 
   /// ------------------------------------------------------------------------------------------
-  /// The same flow on the FX and stocks pools. An LP leg is denominated in the LEG'S OWN token,
-  /// so every amount below is built from that token's `decimals()`, never from a literal 1e18.
+  /// The same flow on an FX and an equity leg. An LP leg is denominated in the LEG'S OWN token,
+  /// so every amount below is built from that token's `decimals()` and mark, never from a
+  /// literal 1e18.
   /// ------------------------------------------------------------------------------------------
 
-  /// EURC is 6 decimals. `units()` is the only reason this reads the same as the USDT case, and
-  /// a hardcoded `10_000e18` here would ask the pool for 10 billion EURC.
-  function test_fxPoolSixDecimalLegMintsShares() public {
-    assertEq(IERC20(EURC).decimals(), 6, "the premise of this test");
-    uint256 amount = units(EURC, 10_000);
-    assertEq(amount, 10_000e6, "derived, not assumed");
-    fund(EURC, amount, address(fxPool));
+  /// An FX token can have fewer decimals than the base. `unitsWorth()` is the only reason this
+  /// reads the same as the stable case, and a hardcoded `10_000e18` here would ask the pool for
+  /// a trillion short-decimals tokens.
+  function test_fxLegMintsShares() public {
+    Leg memory l = _leg("fx", "no pool holds an FX leg");
+    uint256 amount = unitsWorth(l.sym, 10_000);
+    fund(l.token, amount, address(l.pool));
 
     vm.prank(alice);
-    IPool.DepositResult memory r = fxPool.deposit(EURC, amount);
+    IPool.DepositResult memory r = l.pool.deposit(l.token, amount);
 
     assertGt(r.lpAmount, 0, "a zero mint is a failure, not a deposit");
     assertEq(r.actualDeposit, amount, "the pool took a different amount than asked");
-    assertEq(fxPool.getLPBalance(alice, EURC), r.lpAmount - r.deadLp);
-    assertEq(IERC20(EURC).balanceOf(alice), 0, "the whole deposit should have been pulled");
+    assertEq(l.pool.getLPBalance(alice, l.token), r.lpAmount - r.deadLp);
+    assertEq(IERC20(l.token).balanceOf(alice), 0, "the whole deposit should have been pulled");
 
-    (uint256 back,) = fxPool.previewWithdraw(EURC, r.lpAmount - r.deadLp);
+    (uint256 back,) = l.pool.previewWithdraw(l.token, r.lpAmount - r.deadLp);
     assertGt(back, 0, "a zero preview is a failure, not a valuation");
     assertLe(back, amount, "a same-block round trip must never return more than it took");
 
-    emit log_named_uint("deposited (EURC, 6dp)", amount);
+    emit log_named_uint(string.concat("deposited (", l.sym, ")"), amount);
     emit log_named_uint("shares minted        ", r.lpAmount);
   }
 
-  /// A tokenised-equity leg. 100 NVDA is a five-figure USD position out of a three-digit token
-  /// amount, which is the opposite shape to every stable example above it.
-  function test_stocksPoolEquityLegMintsShares() public {
-    uint256 amount = units(NVDA, 100);
-    fund(NVDA, amount, address(stocksPool));
+  /// A tokenised-equity leg. $10,000 of it is a three-digit token amount, which is the opposite
+  /// shape to every stable example above it.
+  function test_equityLegMintsShares() public {
+    Leg memory l = _leg("equity", "no pool holds an equity leg");
+    uint256 amount = unitsWorth(l.sym, 10_000);
+    fund(l.token, amount, address(l.pool));
 
-    uint256 before = stocksPool.getLPBalance(alice, NVDA);
+    uint256 before = l.pool.getLPBalance(alice, l.token);
     vm.prank(alice);
-    IPool.DepositResult memory r = stocksPool.deposit(NVDA, amount);
+    IPool.DepositResult memory r = l.pool.deposit(l.token, amount);
 
     assertGt(r.lpAmount, 0);
-    assertEq(stocksPool.getLPBalance(alice, NVDA) - before, r.lpAmount - r.deadLp);
-    assertTrue(stocksPool.lpToken(NVDA) != address(0), "leg is not listed");
+    assertEq(l.pool.getLPBalance(alice, l.token) - before, r.lpAmount - r.deadLp);
+    assertTrue(l.pool.lpToken(l.token) != address(0), "leg is not listed");
 
-    emit log_named_uint("deposited (NVDA)", amount);
+    emit log_named_uint(string.concat("deposited (", l.sym, ")"), amount);
     emit log_named_uint("shares minted   ", r.lpAmount);
   }
 
-  /// Coverage dilutes toward parity on an equity leg exactly as it does on a stable one. The
-  /// asset class does not change the accounting.
-  function test_stocksPoolDepositMovesCoverageTowardParity() public {
-    uint256 amount = units(NVDA, 500);
-    fund(NVDA, amount, address(stocksPool));
+  /// Coverage is dragged toward C on an equity leg exactly as it is on a stable one. The asset
+  /// class does not change the accounting.
+  function test_equityDepositMovesCoverageTowardPoolSolvency() public {
+    Leg memory l = _leg("equity", "no pool holds an equity leg");
+    uint256 amount = unitsWorth(l.sym, 50_000);
+    fund(l.token, amount, address(l.pool));
 
-    uint256 before = stocksPool.getCoverageRatio(NVDA);
+    (uint256 c,) = l.pool.poolSolvencyWad();
+    uint256 before = l.pool.getCoverageRatio(l.token);
     vm.prank(alice);
-    stocksPool.deposit(NVDA, amount);
-    uint256 afterCov = stocksPool.getCoverageRatio(NVDA);
+    l.pool.deposit(l.token, amount);
+    uint256 afterCov = l.pool.getCoverageRatio(l.token);
 
-    uint256 gapBefore = before > 1e18 ? before - 1e18 : 1e18 - before;
-    uint256 gapAfter = afterCov > 1e18 ? afterCov - 1e18 : 1e18 - afterCov;
-    assertLe(gapAfter, gapBefore, "a deposit must move coverage toward parity");
+    assertLe(_gap(afterCov, c), _gap(before, c), "a deposit must move coverage toward C");
 
     emit log_named_decimal_uint("coverage before", before, 18);
     emit log_named_decimal_uint("coverage after ", afterCov, 18);

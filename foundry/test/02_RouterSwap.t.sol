@@ -29,105 +29,129 @@ import {IERC20, IPool, IRouter} from "../src/interfaces/IBTR.sol";
  */
 contract RouterSwapTest is BTRForkTest {
   uint256 constant SLIPPAGE_BPS = 100;
+  string constant NO_ROUTE = "needs two pools sharing a base, one with two non-base legs";
+
+  /// @dev Legs for the multi-pool routes: `a` and `a2` in one pool, `b` in another. Skips when the
+  ///      chain has no such shape, or when a leg is gated to an allowlist `alice` is not on (the
+  ///      reverts below would then pass for the wrong reason).
+  function _route() internal returns (Leg memory a, Leg memory a2, Leg memory b) {
+    bool ok;
+    (a, a2, b, ok) = routeSet();
+    skipUnless(ok, NO_ROUTE);
+    skipIfSwapGated(a);
+    skipIfSwapGated(a2);
+    skipIfSwapGated(b);
+  }
+
+  /// @dev One leg for the single-pool routes.
+  function _leg() internal returns (Leg memory l) {
+    bool ok;
+    (l, ok) = demoLeg();
+    skipUnless(ok, "no pool holds a non-base leg");
+    skipIfSwapGated(l);
+  }
 
   function test_routerIsWiredToTheOfficialFactory() public view {
     assertEq(router.factory(), addr(".contracts.poolFactory"), "router points at a foreign factory");
   }
 
-  /// TWO HOPS ACROSS TWO POOLS: USDT -> (stable pool) -> USDCB -> (crypto pool) -> WETH.
+  /// TWO HOPS ACROSS TWO POOLS: a -> (pool 1) -> base -> (pool 2) -> b.
   ///
-  /// Neither pool holds both ends. USDCB is the shared base, so the route is only expressible as
-  /// a chain, and doing it by hand would be two approvals and two signatures with an unhedged
-  /// USDCB position in between.
+  /// Neither pool holds both ends. The base is shared, so the route is only expressible as a
+  /// chain, and doing it by hand would be two approvals and two signatures with an unhedged
+  /// base position in between.
   function test_twoHopAcrossTwoPools() public {
-    uint256 amountIn = units(USDT, 2_000);
-    fund(USDT, amountIn, address(router));
+    (Leg memory a,, Leg memory b) = _route();
+    uint256 amountIn = unitsWorth(a.sym, 2_000);
+    fund(a.token, amountIn, address(router));
 
     // Quote each leg off chain (here: off contract) and chain them. This is exactly what a route
     // finder produces, and why route selection does not belong on chain: it is a search.
-    uint256 mid = stablePool.getSwapQuote(USDT, USDCB, amountIn).amountOut;
-    uint256 expected = cryptoPool.getSwapQuote(USDCB, WETH, mid).amountOut;
+    uint256 mid = a.pool.getSwapQuote(a.token, base, amountIn).amountOut;
+    uint256 expected = b.pool.getSwapQuote(base, b.token, mid).amountOut;
     assertGt(expected, 0, "a zero quote is a failure, not a price");
 
     IRouter.Hop[] memory hops = new IRouter.Hop[](2);
-    hops[0] = IRouter.Hop({pool: address(stablePool), tokenOut: USDCB});
-    hops[1] = IRouter.Hop({pool: address(cryptoPool), tokenOut: WETH});
+    hops[0] = IRouter.Hop({pool: address(a.pool), tokenOut: base});
+    hops[1] = IRouter.Hop({pool: address(b.pool), tokenOut: b.token});
 
     IRouter.Part[] memory parts = new IRouter.Part[](1);
-    parts[0] = IRouter.Part({tokenIn: USDT, amountIn: amountIn, hops: hops});
+    parts[0] = IRouter.Part({tokenIn: a.token, amountIn: amountIn, hops: hops});
 
     IRouter.Floor[] memory floors = new IRouter.Floor[](1);
     floors[0] =
-      IRouter.Floor({token: WETH, minOut: expected * (10_000 - SLIPPAGE_BPS) / 10_000});
+      IRouter.Floor({token: b.token, minOut: expected * (10_000 - SLIPPAGE_BPS) / 10_000});
 
     vm.prank(alice);
     uint256[] memory received = router.swap(parts, floors, alice, block.timestamp + 600);
 
     assertEq(received.length, 1);
-    assertEq(received[0], IERC20(WETH).balanceOf(alice), "receipt must match what arrived");
+    assertEq(received[0], IERC20(b.token).balanceOf(alice), "receipt must match what arrived");
     assertGe(received[0], floors[0].minOut);
-    assertEq(IERC20(USDCB).balanceOf(alice), 0, "the intermediate must never reach the recipient");
-    assertEq(IERC20(USDCB).balanceOf(address(router)), 0, "router must not retain the middle leg");
+    assertEq(IERC20(base).balanceOf(alice), 0, "the intermediate must never reach the recipient");
+    assertEq(IERC20(base).balanceOf(address(router)), 0, "router must not retain the middle leg");
 
-    emit log_named_uint("USDT in      ", amountIn);
-    emit log_named_uint("USDCB (mid)  ", mid);
-    emit log_named_uint("WETH out     ", received[0]);
+    emit log_named_uint(string.concat(a.sym, " in      "), amountIn);
+    emit log_named_uint(string.concat(baseSym, " (mid)"), mid);
+    emit log_named_uint(string.concat(b.sym, " out     "), received[0]);
   }
 
   /// TWO PARTS, TWO INPUTS, TWO OUTPUT TOKENS, ONE SIGNATURE.
-  /// Part A: USDT -> USDCB -> WETH   (2 hops, 2 pools)
-  /// Part B: USDS -> USDCB           (1 hop)
-  /// Note the floor set: WETH is part A's terminal, USDCB is part B's. The USDCB that part A
+  /// Part A: a  -> base -> b   (2 hops, 2 pools)
+  /// Part B: a2 -> base        (1 hop)
+  /// Note the floor set: b is part A's terminal, the base is part B's. The base that part A
   /// produced is NOT claimable, because part A consumed it in its second hop.
   function test_multiPartSplitWithTwoOutputTokens() public {
-    uint256 inA = units(USDT, 1_000);
-    uint256 inB = units(USDS, 1_000);
-    fund(USDT, inA, address(router));
-    fund(USDS, inB, address(router));
+    (Leg memory a, Leg memory a2, Leg memory b) = _route();
+    uint256 inA = unitsWorth(a.sym, 1_000);
+    uint256 inB = unitsWorth(a2.sym, 1_000);
+    fund(a.token, inA, address(router));
+    fund(a2.token, inB, address(router));
 
-    uint256 midA = stablePool.getSwapQuote(USDT, USDCB, inA).amountOut;
-    uint256 expectWeth = cryptoPool.getSwapQuote(USDCB, WETH, midA).amountOut;
-    uint256 expectUsdcb = stablePool.getSwapQuote(USDS, USDCB, inB).amountOut;
+    uint256 midA = a.pool.getSwapQuote(a.token, base, inA).amountOut;
+    uint256 expectFar = b.pool.getSwapQuote(base, b.token, midA).amountOut;
+    uint256 expectBase = a.pool.getSwapQuote(a2.token, base, inB).amountOut;
 
     IRouter.Hop[] memory hopsA = new IRouter.Hop[](2);
-    hopsA[0] = IRouter.Hop({pool: address(stablePool), tokenOut: USDCB});
-    hopsA[1] = IRouter.Hop({pool: address(cryptoPool), tokenOut: WETH});
+    hopsA[0] = IRouter.Hop({pool: address(a.pool), tokenOut: base});
+    hopsA[1] = IRouter.Hop({pool: address(b.pool), tokenOut: b.token});
 
     IRouter.Hop[] memory hopsB = new IRouter.Hop[](1);
-    hopsB[0] = IRouter.Hop({pool: address(stablePool), tokenOut: USDCB});
+    hopsB[0] = IRouter.Hop({pool: address(a.pool), tokenOut: base});
 
     IRouter.Part[] memory parts = new IRouter.Part[](2);
-    parts[0] = IRouter.Part({tokenIn: USDT, amountIn: inA, hops: hopsA});
-    parts[1] = IRouter.Part({tokenIn: USDS, amountIn: inB, hops: hopsB});
+    parts[0] = IRouter.Part({tokenIn: a.token, amountIn: inA, hops: hopsA});
+    parts[1] = IRouter.Part({tokenIn: a2.token, amountIn: inB, hops: hopsB});
 
     IRouter.Floor[] memory floors = new IRouter.Floor[](2);
-    floors[0] = IRouter.Floor({token: WETH, minOut: expectWeth * 99 / 100});
-    floors[1] = IRouter.Floor({token: USDCB, minOut: expectUsdcb * 99 / 100});
+    floors[0] = IRouter.Floor({token: b.token, minOut: expectFar * 99 / 100});
+    floors[1] = IRouter.Floor({token: base, minOut: expectBase * 99 / 100});
 
     vm.prank(alice);
     uint256[] memory received = router.swap(parts, floors, alice, block.timestamp + 600);
 
-    assertGe(received[0], floors[0].minOut, "WETH short");
-    assertGe(received[1], floors[1].minOut, "USDCB short");
-    assertEq(IERC20(WETH).balanceOf(alice), received[0]);
-    assertEq(IERC20(USDCB).balanceOf(alice), received[1]);
+    assertGe(received[0], floors[0].minOut, "far leg short");
+    assertGe(received[1], floors[1].minOut, "base short");
+    assertEq(IERC20(b.token).balanceOf(alice), received[0]);
+    assertEq(IERC20(base).balanceOf(alice), received[1]);
 
-    emit log_named_uint("part A: WETH out ", received[0]);
-    emit log_named_uint("part B: USDCB out", received[1]);
+    emit log_named_uint("part A: far leg out", received[0]);
+    emit log_named_uint("part B: base out   ", received[1]);
   }
 
   /// A part whose terminal token has no floor entry reverts. The proceeds would otherwise sit in
   /// the router with nobody entitled to them: a silent loss that looks like a successful swap.
   function test_unclaimedOutputReverts() public {
-    uint256 amountIn = units(USDT, 100);
-    fund(USDT, amountIn, address(router));
+    Leg memory l = _leg();
+    uint256 amountIn = unitsWorth(l.sym, 100);
+    fund(l.token, amountIn, address(router));
 
     IRouter.Hop[] memory hops = new IRouter.Hop[](1);
-    hops[0] = IRouter.Hop({pool: address(stablePool), tokenOut: USDCB});
+    hops[0] = IRouter.Hop({pool: address(l.pool), tokenOut: base});
     IRouter.Part[] memory parts = new IRouter.Part[](1);
-    parts[0] = IRouter.Part({tokenIn: USDT, amountIn: amountIn, hops: hops});
+    parts[0] = IRouter.Part({tokenIn: l.token, amountIn: amountIn, hops: hops});
     IRouter.Floor[] memory floors = new IRouter.Floor[](1);
-    floors[0] = IRouter.Floor({token: WETH, minOut: 0}); // wrong token
+    floors[0] = IRouter.Floor({token: l.token, minOut: 0}); // wrong token
 
     vm.prank(alice);
     vm.expectRevert();
@@ -137,16 +161,17 @@ contract RouterSwapTest is BTRForkTest {
   /// One entry per output token. Splitting a single promise over two entries reads a gain of
   /// zero on the second and rejects a route that filled perfectly, so it is refused up front.
   function test_duplicateFloorReverts() public {
-    uint256 amountIn = units(USDT, 100);
-    fund(USDT, amountIn, address(router));
+    Leg memory l = _leg();
+    uint256 amountIn = unitsWorth(l.sym, 100);
+    fund(l.token, amountIn, address(router));
 
     IRouter.Hop[] memory hops = new IRouter.Hop[](1);
-    hops[0] = IRouter.Hop({pool: address(stablePool), tokenOut: USDCB});
+    hops[0] = IRouter.Hop({pool: address(l.pool), tokenOut: base});
     IRouter.Part[] memory parts = new IRouter.Part[](1);
-    parts[0] = IRouter.Part({tokenIn: USDT, amountIn: amountIn, hops: hops});
+    parts[0] = IRouter.Part({tokenIn: l.token, amountIn: amountIn, hops: hops});
     IRouter.Floor[] memory floors = new IRouter.Floor[](2);
-    floors[0] = IRouter.Floor({token: USDCB, minOut: 0});
-    floors[1] = IRouter.Floor({token: USDCB, minOut: 0});
+    floors[0] = IRouter.Floor({token: base, minOut: 0});
+    floors[1] = IRouter.Floor({token: base, minOut: 0});
 
     vm.prank(alice);
     vm.expectRevert();
@@ -156,39 +181,41 @@ contract RouterSwapTest is BTRForkTest {
   /// The floor is the whole protection. An unreachable one must revert the entire route, not
   /// deliver part of it.
   function test_floorBitesAcrossTheWholePath() public {
-    uint256 amountIn = units(USDT, 1_000);
-    fund(USDT, amountIn, address(router));
+    (Leg memory a,, Leg memory b) = _route();
+    uint256 amountIn = unitsWorth(a.sym, 1_000);
+    fund(a.token, amountIn, address(router));
 
-    uint256 mid = stablePool.getSwapQuote(USDT, USDCB, amountIn).amountOut;
-    uint256 expected = cryptoPool.getSwapQuote(USDCB, WETH, mid).amountOut;
+    uint256 mid = a.pool.getSwapQuote(a.token, base, amountIn).amountOut;
+    uint256 expected = b.pool.getSwapQuote(base, b.token, mid).amountOut;
 
     IRouter.Hop[] memory hops = new IRouter.Hop[](2);
-    hops[0] = IRouter.Hop({pool: address(stablePool), tokenOut: USDCB});
-    hops[1] = IRouter.Hop({pool: address(cryptoPool), tokenOut: WETH});
+    hops[0] = IRouter.Hop({pool: address(a.pool), tokenOut: base});
+    hops[1] = IRouter.Hop({pool: address(b.pool), tokenOut: b.token});
     IRouter.Part[] memory parts = new IRouter.Part[](1);
-    parts[0] = IRouter.Part({tokenIn: USDT, amountIn: amountIn, hops: hops});
+    parts[0] = IRouter.Part({tokenIn: a.token, amountIn: amountIn, hops: hops});
     IRouter.Floor[] memory floors = new IRouter.Floor[](1);
-    floors[0] = IRouter.Floor({token: WETH, minOut: expected * 2});
+    floors[0] = IRouter.Floor({token: b.token, minOut: expected * 2});
 
     vm.prank(alice);
     vm.expectRevert();
     router.swap(parts, floors, alice, block.timestamp + 600);
 
-    assertEq(IERC20(USDT).balanceOf(alice), amountIn, "a reverted route must leave the input intact");
+    assertEq(IERC20(a.token).balanceOf(alice), amountIn, "a reverted route must leave the input intact");
   }
 
   /// Pools are checked against the factory registry. The router approves whatever address it is
   /// handed, so an arbitrary one could take the allowance and keep it.
   function test_unknownPoolReverts() public {
-    uint256 amountIn = units(USDT, 100);
-    fund(USDT, amountIn, address(router));
+    Leg memory l = _leg();
+    uint256 amountIn = unitsWorth(l.sym, 100);
+    fund(l.token, amountIn, address(router));
 
     IRouter.Hop[] memory hops = new IRouter.Hop[](1);
-    hops[0] = IRouter.Hop({pool: makeAddr("not a pool"), tokenOut: USDCB});
+    hops[0] = IRouter.Hop({pool: makeAddr("not a pool"), tokenOut: base});
     IRouter.Part[] memory parts = new IRouter.Part[](1);
-    parts[0] = IRouter.Part({tokenIn: USDT, amountIn: amountIn, hops: hops});
+    parts[0] = IRouter.Part({tokenIn: l.token, amountIn: amountIn, hops: hops});
     IRouter.Floor[] memory floors = new IRouter.Floor[](1);
-    floors[0] = IRouter.Floor({token: USDCB, minOut: 0});
+    floors[0] = IRouter.Floor({token: base, minOut: 0});
 
     vm.prank(alice);
     vm.expectRevert();
@@ -198,15 +225,16 @@ contract RouterSwapTest is BTRForkTest {
   /// Routing a single hop through the Router costs more gas than calling the pool. Measured, not
   /// asserted as a rule: the Router earns its keep on 2+ hops and on splits.
   function test_singleHopIsCheaperDirect() public {
-    uint256 amountIn = units(USDT, 500);
+    Leg memory l = _leg();
+    uint256 amountIn = unitsWorth(l.sym, 500);
 
-    fund(USDT, amountIn, address(router));
+    fund(l.token, amountIn, address(router));
     IRouter.Hop[] memory hops = new IRouter.Hop[](1);
-    hops[0] = IRouter.Hop({pool: address(stablePool), tokenOut: USDCB});
+    hops[0] = IRouter.Hop({pool: address(l.pool), tokenOut: base});
     IRouter.Part[] memory parts = new IRouter.Part[](1);
-    parts[0] = IRouter.Part({tokenIn: USDT, amountIn: amountIn, hops: hops});
+    parts[0] = IRouter.Part({tokenIn: l.token, amountIn: amountIn, hops: hops});
     IRouter.Floor[] memory floors = new IRouter.Floor[](1);
-    floors[0] = IRouter.Floor({token: USDCB, minOut: 0});
+    floors[0] = IRouter.Floor({token: base, minOut: 0});
 
     uint256 snap = vm.snapshotState();
     vm.prank(alice);
@@ -216,10 +244,10 @@ contract RouterSwapTest is BTRForkTest {
 
     vm.revertToState(snap);
     vm.prank(alice);
-    IERC20(USDT).approve(address(stablePool), type(uint256).max);
+    IERC20(l.token).approve(address(l.pool), type(uint256).max);
     vm.prank(alice);
     g0 = gasleft();
-    stablePool.swap_qe(USDT, USDCB, amountIn, 0, alice, block.timestamp + 600);
+    l.pool.swap_qe(l.token, base, amountIn, 0, alice, block.timestamp + 600);
     uint256 direct = g0 - gasleft();
 
     emit log_named_uint("gas via router", viaRouter);

@@ -14,7 +14,9 @@ import { loadConfig } from '../src/config.ts';
 
 const cfg = loadConfig();
 const port = Number(process.env.ANVIL_PORT ?? 8545);
-const forkUrl = process.env.BTR_FORK_URL ?? cfg.rpcUrl;
+// BTR_FORK_URL wins; otherwise the config's public endpoints are tried in order, because anvil
+// cannot read an endpoint that compresses unconditionally and one dead host must not fail the run.
+const forkUrls = process.env.BTR_FORK_URL ? [process.env.BTR_FORK_URL] : cfg.rpcUrls;
 const rpc = `http://127.0.0.1:${port}`;
 
 /** anvil's first well-known development key. Public, worthless, and the point: no real key is
@@ -54,17 +56,6 @@ if (occupied) {
   process.exit(1);
 }
 
-const anvil = Bun.spawn(
-  [
-    'anvil', '--fork-url', forkUrl, '--port', String(port), '--silent',
-    '--chain-id', String(cfg.chainId),
-    '--compute-units-per-second', cups,
-    '--retries', '10',
-    '--fork-retry-backoff', '2',
-  ],
-  { stdout: 'pipe', stderr: 'pipe' },
-);
-
 async function ready(timeoutMs = 60_000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -83,15 +74,49 @@ async function ready(timeoutMs = 60_000) {
   throw new Error('anvil did not come up');
 }
 
+const spawnAnvil = (forkUrl: string) =>
+  Bun.spawn(
+    [
+      'anvil', '--fork-url', forkUrl, '--port', String(port), '--silent',
+      '--chain-id', String(cfg.chainId),
+      '--compute-units-per-second', cups,
+      '--retries', '10',
+      '--fork-retry-backoff', '2',
+    ],
+    { stdout: 'pipe', stderr: 'pipe' },
+  );
+
+let anvil: ReturnType<typeof spawnAnvil> | undefined;
+let forkUrl = '';
+for (const url of forkUrls) {
+  const candidate = spawnAnvil(url);
+  // anvil exits at once on an endpoint it cannot read; a good one stays up and answers.
+  const up = await Promise.race([ready().then(() => true, () => false), candidate.exited.then(() => false)]);
+  if (up) {
+    anvil = candidate;
+    forkUrl = url;
+    break;
+  }
+  candidate.kill();
+  console.error(`anvil could not fork ${url}, trying the next endpoint`);
+}
+if (!anvil) {
+  console.error('no endpoint in the config answered; set BTR_FORK_URL');
+  process.exit(1);
+}
+
+// `process.exit` skips `finally`, which left a fork running on the port after every green run and
+// made the next run refuse it. Exit only once anvil is down.
+let code = 1;
 try {
-  await ready();
   console.log(`anvil forking ${forkUrl} at ${rpc}\n`);
   const test = Bun.spawn(['bun', 'test', 'test/fork', ...Bun.argv.slice(2)], {
     env: { ...process.env, BTR_RPC_URL: rpc, BTR_PRIVATE_KEY: ANVIL_KEY },
     stdout: 'inherit',
     stderr: 'inherit',
   });
-  process.exit(await test.exited);
+  code = await test.exited;
 } finally {
   anvil.kill();
 }
+process.exit(code);

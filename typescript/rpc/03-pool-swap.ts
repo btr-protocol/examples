@@ -15,9 +15,9 @@
  *       BTR_PRIVATE_KEY=0x.. BTR_RPC_URL=http://127.0.0.1:8545 bun run rpc/03-pool-swap.ts
  */
 import { encodeFunctionData } from 'viem';
-import { deadline, floorFrom, fmt, pool, token, withRetry, type Address } from '../src/config.ts';
+import { base, baseUnits, deadline, demoLeg, floorFrom, fmt, need, withRetry, type Address } from '../src/config.ts';
 import {
-  ERC20_ABI, POOL_ABI, armed, balanceOf, decimalsOf, publicClient, send, senderOrPlaceholder,
+  ERC20_ABI, POOL_ABI, armed, balanceOf, publicClient, send, senderOrPlaceholder,
   type Call,
 } from '../src/viem-client.ts';
 
@@ -59,17 +59,18 @@ export async function swapCalls(
 }
 
 if (import.meta.main) {
-  const p = pool('stablePool');
-  const tokenIn = token('USDCB');
-  const tokenOut = token('USDT');
-  const amountIn = 1_000n * 10n ** BigInt(await decimalsOf(tokenIn));
+  const leg = need(demoLeg(), 'pool with a non-base leg');
+  const p = leg.pool;
+  const tokenIn = base.address;
+  const tokenOut = leg.token;
+  const amountIn = baseUnits(1_000);
   const recipient = senderOrPlaceholder;
 
   const { q, minAmountOut, calls } = await swapCalls(p, tokenIn, tokenOut, amountIn, 50, recipient);
   console.log(`pool        ${p}`);
-  console.log(`amountIn    ${fmt(amountIn)} USDCB`);
-  console.log(`quoted out  ${fmt(q.amountOut)} USDT`);
-  console.log(`floor       ${fmt(minAmountOut)} USDT   (50 bps)`);
+  console.log(`amountIn    ${fmt(amountIn, base.decimals)} ${base.symbol}`);
+  console.log(`quoted out  ${fmt(q.amountOut, leg.decimals)} ${leg.symbol}`);
+  console.log(`floor       ${fmt(minAmountOut, leg.decimals)} ${leg.symbol}   (50 bps)`);
   console.log(`spread      ${q.spreadPbps} pbps`);
   console.log(`mark / mid  ${fmt(q.markPrice)} / ${fmt(q.midPrice)}`);
   console.log(`route       ${q.routeHops.join(' -> ')}`);
@@ -78,7 +79,7 @@ if (import.meta.main) {
   await send(calls);
   if (armed) {
     const got = (await balanceOf(tokenOut, recipient)) - before;
-    console.log(`\nfilled      ${fmt(got)} USDT`);
+    console.log(`\nfilled      ${fmt(got, leg.decimals)} ${leg.symbol}`);
     if (got < minAmountOut) throw new Error('filled below the floor');
   }
 }

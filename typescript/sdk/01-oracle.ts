@@ -15,11 +15,15 @@ import { createHttpProvider, readContract } from '@btr-protocol/sdk/eth';
 import { POOL_FACTORY_ABI } from '@btr-protocol/sdk/abis';
 import { observedAtSecs, type FeedData } from '@btr-protocol/sdk/oracle';
 import {
-  config, feedId, fmt, followsUsEquityCalendar, rpcUrl, usMarketOpen, withRetry,
+  config, feedId, fmt, followsUsEquityCalendar, legs, rpcUrl, usMarketOpen, withRetry,
   type Address, type Hex,
 } from '../src/config.ts';
 
-/** Your risk appetite, not the protocol's. `ttlSecs` is the outer bound; this is tighter. */
+/**
+ * Your risk appetite, not the protocol's. `ttlSecs` is the outer bound; this is tighter. Size
+ * `maxAgeSecs` per class: pushes are edge triggered, so an idle stable can be minutes old inside
+ * a 3600s ttl and a 600s bound would reject it.
+ */
 export interface Gate {
   maxAgeSecs: number;
   maxConfidenceBps: number;
@@ -111,11 +115,11 @@ export function conservativeValue1e18(mark1e18: bigint, confidenceBps: number, a
 /**
  * `live` | `closed` | `incident` - and the difference between the last two is the whole point.
  *
- * A feed is stale when nothing has marked it recently. For WETH, EURC or JPYC that is always an
- * incident: crypto and FX trade continuously, so silence means the pipe broke. For NVDA, ASML or
- * TSLA it is usually a CLOSED MARKET. The US cash session is about 30% of the week, and the keeper
- * deliberately does not heartbeat a frozen record, because republishing a dead price on a clock is
- * worse than saying nothing.
+ * A feed is stale when nothing has marked it recently. For a crypto, FX or stable feed that is
+ * always an incident: they trade continuously, so silence means the pipe broke. For a feed on the
+ * US equity calendar (`calendars.usEquity` in the config) it is usually a CLOSED MARKET. The US
+ * cash session is about 30% of the week, and the keeper deliberately does not heartbeat a frozen
+ * record, because republishing a dead price on a clock is worse than saying nothing.
  *
  * Page on `incident` only. An equity monitor that pages on staleness pages every weekend, and an
  * alert that fires every weekend is one nobody reads by the third month.
@@ -153,11 +157,11 @@ export async function classify(symbol: string, nowSecs = Date.now() / 1000): Pro
 }
 
 if (import.meta.main) {
-  // Six feeds, three asset classes, because the classes do not behave the same way. FX carries a
-  // 3600s ttl; equities and crypto carry 600s. JPYC's mark is ~0.0063 WAD and ASML's is ~1657 WAD,
-  // six orders of magnitude apart in the SAME uint256, which is why nothing here rounds to a
-  // whole number anywhere.
-  const symbols = ['EURC', 'JPYC', 'NVDA', 'ASML', 'TSLA', 'WETH'];
+  // Every token the pools hold, whatever its class. The classes do not behave the same way: FX
+  // and stables carry a longer ttl than crypto, equities are stale outside the US cash session,
+  // and the marks span orders of magnitude in the SAME uint256, which is why nothing here rounds
+  // to a whole number anywhere.
+  const symbols = [config.baseToken, ...new Set(legs.map((l) => l.symbol))];
   console.log(`${config.name} (chain ${config.chainId})`);
   console.log(`oracle (PoolFactory) ${config.contracts.poolFactory}\n`);
 
@@ -180,7 +184,8 @@ if (import.meta.main) {
     }
   }
 
-  // ASML has a feed but no listed token in this deployment: the oracle's feed set is a SUPERSET of
-  // what any pool trades. Reading a mark is never evidence that a pair is swappable.
-  console.log(`\nASML feed present: ${'ASML' in config.feeds}, ASML token listed: ${'ASML' in config.tokens}`);
+  // The factory's feed set is a SUPERSET of what any pool trades. Reading a mark is never
+  // evidence that a pair is swappable.
+  const unlisted = Object.keys(config.feeds).filter((s) => s !== config.baseToken && !legs.some((l) => l.symbol === s));
+  if (unlisted.length) console.log(`\nfeed with no pool leg on this chain: ${unlisted.join(', ')}`);
 }

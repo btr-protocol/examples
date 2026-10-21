@@ -37,6 +37,7 @@ export const ORACLE_ABI = parseAbi([
 
 export const POOL_ABI = parseAbi([
   'struct SwapQuote { uint256 amountOut; uint256 amountIn; uint16 spreadPbps; uint256 protoFee; uint256 lpFee; int8 skewIn; int8 skewOut; uint256 markPrice; uint256 midPrice; uint256 covToll; address[] routeHops; uint256[] hopAmounts; uint256[] hopPrices; }',
+  'struct Asset { uint128 reserves; uint128 liabilities; address anchor; uint96 minLiquidity; uint72 liquidityIndexWad; uint32 minDispersionPbps; uint16 curveId; uint16 minFeePbps; uint16 vegaBps; uint16 depositCapCode; uint8 decimals; uint8 deadSeedPow10; uint16 flags; uint16 kappaCovBps; uint16 maxLiabWeightBps; uint8 oracleBits; uint16 refBandBps; }',
   'struct DepositResult { uint256 lpAmount; uint256 actualDeposit; uint256 deadLp; }',
   'struct WithdrawResult { uint256 amountOut; }',
   'function getSwapQuote(address tokenIn, address tokenOut, uint256 amountIn) view returns (SwapQuote)',
@@ -48,6 +49,8 @@ export const POOL_ABI = parseAbi([
   'function getLPBalance(address user, address tk) view returns (uint256)',
   'function maxRedeem(address owner, address tk) view returns (uint256)',
   'function getCoverageRatio(address tk) view returns (uint256)',
+  'function getAsset(address tk) view returns (Asset)',
+  'function poolSolvencyWad() view returns (uint256 cWad, bool ok)',
   'function getRiskFlags(address tk) view returns (uint16)',
   'function baseToken() view returns (address)',
   'function flowCooldownSecs() view returns (uint16)',

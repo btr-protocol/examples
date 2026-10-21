@@ -6,19 +6,20 @@
  * On chain: ../../foundry/test/06_DebtSwap.t.sol
  *
  * WHY THIS ONE. `@btr-protocol/sdk/pool` ships `quoteSwapLiability`, `liabilitySwapEnabled` and
- * `minLpAmountOut`: an off-chain replica of the haircut maths, so you can size the trade and set
+ * `minLpAmountOut`: an off-chain replica of the settlement maths, so you can size the trade and set
  * the share floor WITHOUT a simulated call. There is no `previewSwapLiability` on the pool, so
  * without the SDK you are reduced to `eth_call`-ing the real function to learn its output.
  *
- * WHAT IT IS. An LP re-denominating a claim from one leg to another: burn USDT shares, mint USDS
- * shares, in one call, without leaving the pool.
+ * WHAT IT IS. An LP re-denominating a claim from one leg to another: burn shares of one leg, mint
+ * shares of another, in one call, without leaving the pool.
  *
  * WHAT IT IS NOT: A TRADE. RESERVES DO NOT MOVE. Only the liability side of two legs changes.
  * Consequences you have to encode for:
  *   - both legs need `LIABILITY_SWAP_ENABLED_BIT` (bit 5) in `getRiskFlags`
- *   - an UNDER-COVERED input leg takes a haircut, so leaving it does not dump the shortfall on
- *     whoever stays; symmetrically, an UNDER-COVERED destination leg marks the arriving
- *     claim down to its coverage, so joining one is not free either
+ *   - it settles at the pool-wide solvency C (`poolSolvencyWad`), the rate a deposit mints at:
+ *     the FACE crosses at the two legs' mark ratio less the swap spread, and there is no per-leg
+ *     haircut. What a share of a leg is WORTH on exit is `face * min(coverage(leg), C)`, so the
+ *     value moves by that ratio between the legs
  *   - BOTH amounts are in LP SHARES, not token units. `minLpAmountOut` is a SHARE floor. Passing
  *     a token amount there is a units bug no passing test will catch.
  *   - THE FLOW COOLDOWN APPLIES. A debt swap moves an LP claim, so it is gated by the same
@@ -31,7 +32,7 @@
 import { LIABILITY_SWAP_ENABLED_BIT, POOL_ABI } from '@btr-protocol/sdk/abis';
 import { readContract } from '@btr-protocol/sdk/eth';
 import { liabilitySwapEnabled } from '@btr-protocol/sdk/pool';
-import { deadline, fmt, pool, token, withRetry, type Address } from '../src/config.ts';
+import { deadline, demoPair, fmt, need, withRetry, type Address } from '../src/config.ts';
 import { account, armed, call, provider, send } from '../src/sdk-wallet.ts';
 import { lpBalance } from './04-deposit.ts';
 import { flowCooldownSecs } from './05-withdraw.ts';
@@ -77,18 +78,19 @@ export const debtSwapCall = (
 ) => call(p, POOL_ABI, 'swapLiability', [tokenIn, tokenOut, lpAmountIn, minLpAmountOut, deadline()], 'swapLiability');
 
 if (import.meta.main) {
-  const p = pool('stablePool');
-  const from = token('USDT');
-  const to = token('USDS');
+  const [a, b] = need(demoPair(), 'pool with two non-base legs');
+  const p = a.pool;
+  const from = a.token;
+  const to = b.token;
   const user = (account ?? '0x000000000000000000000000000000000000dEaD') as Address;
 
   await assertLegsEnabled(p, from, to);
   console.log(`pool        ${p}`);
-  console.log(`legs        USDT -> USDS, both liability-swap enabled`);
+  console.log(`legs        ${a.symbol} -> ${b.symbol}, both liability-swap enabled`);
   console.log(`cooldown    ${await flowCooldownSecs(p)}s   (shares minted inside it cannot be re-denominated)`);
 
   const shares = await lpBalance(p, user, from);
-  console.log(`lp balance  ${fmt(shares)} USDT shares`);
+  console.log(`lp balance  ${fmt(shares)} ${a.symbol} shares`);
   if (shares === 0n) {
     console.log('nothing to re-denominate. Run sdk/04-deposit.ts first (against a fork).');
     process.exit(0);
@@ -115,13 +117,13 @@ if (import.meta.main) {
   );
 
   const minLpAmountOut = (quoted * 9_990n) / 10_000n; // 10 bps, in SHARES
-  console.log(`shares out  ${fmt(quoted)} USDS shares  (floor ${fmt(minLpAmountOut)})`);
-  console.log(`value in    ${fmt(valueIn)}`);
-  console.log(`value out   ${fmt(valueOut)}`);
+  console.log(`shares out  ${fmt(quoted)} ${b.symbol} shares  (floor ${fmt(minLpAmountOut)})`);
+  console.log(`value in    ${fmt(valueIn, a.decimals)}`);
+  console.log(`value out   ${fmt(valueOut, b.decimals)}`);
 
   await send([debtSwapCall(p, from, to, shares, minLpAmountOut)]);
   if (armed) {
-    console.log(`\nUSDT shares ${fmt(await lpBalance(p, user, from))}`);
-    console.log(`USDS shares ${fmt(await lpBalance(p, user, to))}`);
+    console.log(`\n${a.symbol} shares ${fmt(await lpBalance(p, user, from))}`);
+    console.log(`${b.symbol} shares ${fmt(await lpBalance(p, user, to))}`);
   }
 }

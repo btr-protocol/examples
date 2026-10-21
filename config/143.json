@@ -1,0 +1,72 @@
+{
+  "name": "Monad mainnet",
+  "chainId": 143,
+  "rpcUrls": [
+    "https://gm.monad.at.htw.tech",
+    "https://monad-mainnet.rpc.sentio.xyz",
+    "https://rpc.sentio.xyz/monad-mainnet"
+  ],
+  "nativeSymbol": "MON",
+  "manifestHash": "0x67d06fbb2c231add66588a2c8779e2344a6d6b71971b156056cbcd7f32685202",
+  "contracts": {
+    "poolFactory": "0xbbbbbbbbbd5e955E20F323cA1F95f8191fD0E0BF",
+    "router": "0xbbbbbbbbb9687Ae7E49AE486e2e5C6408d2AA7fe"
+  },
+  "baseToken": "USDC",
+  "tokens": {
+    "USDC": {
+      "address": "0x754704Bc059F8C67012fEd69BC8A327a5aafb603",
+      "decimals": 6,
+      "class": "stable"
+    },
+    "WMON": {
+      "address": "0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A",
+      "decimals": 18,
+      "class": "volatile"
+    },
+    "CBBTC": {
+      "address": "0xd18B7EC58Cdf4876f6AFebd3Ed1730e4Ce10414b",
+      "decimals": 8,
+      "class": "volatile"
+    },
+    "WBTC": {
+      "address": "0x0555E30da8f98308EdB960aa94C0Db47230d2B9c",
+      "decimals": 8,
+      "class": "volatile"
+    },
+    "WETH": {
+      "address": "0xEE8c0E9f1BFFb4Eb878d8f15f368A02a35481242",
+      "decimals": 18,
+      "class": "volatile"
+    },
+    "XAUT0": {
+      "address": "0x01bFF41798a0BcF287b996046Ca68b395DbC1071",
+      "decimals": 6,
+      "class": "volatile"
+    }
+  },
+  "feeds": {
+    "USDC": "0x0000000000000000000000000000000000000000000000000648453138900000",
+    "WMON": "0x000000000000000000000000000000000000000000000000065b056484500000",
+    "CBBTC": "0x000000000000000000000000000000000000000000000000060a8d6484500000",
+    "WBTC": "0x000000000000000000000000000000000000000000000000064b016484500000",
+    "WETH": "0x0000000000000000000000000000000000000000000000000616a96484500000",
+    "XAUT0": "0x000000000000000000000000000000000000000000000000064ee96484500000"
+  },
+  "calendars": {
+    "usEquity": []
+  },
+  "pools": {
+    "core": {
+      "address": "0xbbbbbbb04f5b762A4CdD1d89E341e2537e3267e4",
+      "assets": [
+        "USDC",
+        "WMON",
+        "CBBTC",
+        "WBTC",
+        "WETH",
+        "XAUT0"
+      ]
+    }
+  }
+}

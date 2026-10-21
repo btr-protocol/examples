@@ -1,70 +1,178 @@
 {
   "name": "Arc testnet",
   "chainId": 5042002,
-  "rpcUrl": "https://rpc.testnet.arc.network",
-  "explorer": "https://testnet.arcscan.app",
+  "rpcUrls": [
+    "https://rpc.blockdaemon.testnet.arc.io",
+    "https://rpc.testnet.arc.io",
+    "https://rpc.quicknode.testnet.arc.io"
+  ],
   "nativeSymbol": "USDC",
+  "manifestHash": "0xe56efd30f782f33d02d039c3c3a02baab863f2f1f2a8d920502a7947375f2015",
   "contracts": {
-    "router": "0xb96d5049045B68548454474d68e597f48414eCc4",
-    "poolFactory": "0xaF5Dfa6F3f549bAb1598Ff24d15c0cF9aCaA6Df7",
-    "faucet": "0x97BE19E537B9064f5c4984dD1e83Ad8b6aBe0cC3"
-  },
-  "pools": {
-    "stablePool": "0x8e33853c6c34F20c93385449afE9477029D45BFE",
-    "fxPool": "0xCbB809d5A5583301e7753D57D73A25C0d12EC232",
-    "cryptoPool": "0xACe9a150cdc3ab8AdBbc3e7CC5d5ce92485624F5",
-    "stocksPool": "0xD98A734203A719d9CA26f562dc8bc9fcb55685e3"
+    "poolFactory": "0xbBBbBBBb323D7f7E51976b8A8DF2Bb4B4608d9B3",
+    "router": "0xBBBbbbbBB698143c38935b29b65B72eBe18C393c",
+    "faucet": "0x482178f9d6A5cf33E044e4B00076E4799a7080c8"
   },
   "baseToken": "USDCB",
   "tokens": {
-    "USDCB": "0x9A8Ea4AB461d0Db943ecB1B1e4CE0B68df9061CC",
-    "USDC": "0x3600000000000000000000000000000000000000",
-    "USDT": "0x878e27566Ab9E32534e306C26388dFcE82D0AB46",
-    "USDS": "0x66dbe40c8dc03f2C9e7A187F253e8889A03640c8",
-    "USD1": "0x0326748d09eD77D8C15fbf04d6277aE4CAF033f3",
-    "PYUSD": "0xeE12a7072779a4ab85f2DD2a1E163DbF164291f9",
-    "EURC": "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a",
-    "EURCB": "0xd9016a91387db71fbD07Cde32E900E17061dE5A1",
-    "QCAD": "0x626eb915d4a4136F7c00352A54378d3A322488da",
-    "AUDF": "0x35c625c07ed4a9123ab863f6e8722c9210c808A3",
-    "JPYC": "0xA1fe5aDcB5f5DD1c21d372D18E7dF7fa5bfbc09e",
-    "KRW1": "0xee7D69C52c2F183A0389374E82ca841c5a463573",
-    "WETH": "0x89A9cD1dd6DE3ab7152EF9c7C5496c2946334D0D",
-    "WBTC": "0xF36eEe851bf3e76E464609a717bAE4a239A8cC7b",
-    "CBBTC": "0xbAA18E707E7b7fE9d1c0e4CeA61603035cb30C55",
-    "BNB": "0x49C710167A4b486F20f9437485D865D653806310",
-    "XAUT": "0x432A3248e91d8B6fd41A487dE8886E0B44Fb7a6D",
-    "PAXG": "0x96f953bAC2FF3829B4a526cacd858A5a22327E03",
-    "NVDA": "0xA4816856b8144ad1bb5a555A9Afa8B0f4B9FC8D0",
-    "TSLA": "0xBA76ce34AC2c65813ee2c11F34Ad1523fE43CBac"
+    "USDCB": {
+      "address": "0x9A8Ea4AB461d0Db943ecB1B1e4CE0B68df9061CC",
+      "decimals": 18,
+      "class": "stable"
+    },
+    "EURC": {
+      "address": "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a",
+      "decimals": 6,
+      "class": "fx"
+    },
+    "USDT": {
+      "address": "0x878e27566Ab9E32534e306C26388dFcE82D0AB46",
+      "decimals": 18,
+      "class": "stable"
+    },
+    "USDS": {
+      "address": "0x66dbe40c8dc03f2C9e7A187F253e8889A03640c8",
+      "decimals": 18,
+      "class": "stable"
+    },
+    "USD1": {
+      "address": "0x0326748d09eD77D8C15fbf04d6277aE4CAF033f3",
+      "decimals": 18,
+      "class": "stable"
+    },
+    "PYUSD": {
+      "address": "0xeE12a7072779a4ab85f2DD2a1E163DbF164291f9",
+      "decimals": 18,
+      "class": "stable"
+    },
+    "QCAD": {
+      "address": "0x626eb915d4a4136F7c00352A54378d3A322488da",
+      "decimals": 18,
+      "class": "fx"
+    },
+    "AUDF": {
+      "address": "0x35c625c07ed4a9123ab863f6e8722c9210c808A3",
+      "decimals": 18,
+      "class": "fx"
+    },
+    "JPYC": {
+      "address": "0xA1fe5aDcB5f5DD1c21d372D18E7dF7fa5bfbc09e",
+      "decimals": 18,
+      "class": "fx"
+    },
+    "KRW1": {
+      "address": "0xee7D69C52c2F183A0389374E82ca841c5a463573",
+      "decimals": 18,
+      "class": "fx"
+    },
+    "WETH": {
+      "address": "0x89A9cD1dd6DE3ab7152EF9c7C5496c2946334D0D",
+      "decimals": 18,
+      "class": "volatile"
+    },
+    "WBTC": {
+      "address": "0xF36eEe851bf3e76E464609a717bAE4a239A8cC7b",
+      "decimals": 18,
+      "class": "volatile"
+    },
+    "CBBTC": {
+      "address": "0xbAA18E707E7b7fE9d1c0e4CeA61603035cb30C55",
+      "decimals": 18,
+      "class": "volatile"
+    },
+    "BNB": {
+      "address": "0x49C710167A4b486F20f9437485D865D653806310",
+      "decimals": 18,
+      "class": "volatile"
+    },
+    "XAUT": {
+      "address": "0x432A3248e91d8B6fd41A487dE8886E0B44Fb7a6D",
+      "decimals": 18,
+      "class": "volatile"
+    },
+    "PAXG": {
+      "address": "0x96f953bAC2FF3829B4a526cacd858A5a22327E03",
+      "decimals": 18,
+      "class": "volatile"
+    },
+    "INTC": {
+      "address": "0xd7A6216738Eba05C0ee47ff478e307bE5A94Dc95",
+      "decimals": 18,
+      "class": "equity"
+    },
+    "AMD": {
+      "address": "0x3e04aa20170944d29681a475Bb3dd0a1Bb421cCb",
+      "decimals": 18,
+      "class": "equity"
+    },
+    "NVDA": {
+      "address": "0xA4816856b8144ad1bb5a555A9Afa8B0f4B9FC8D0",
+      "decimals": 18,
+      "class": "equity"
+    },
+    "ASML": {
+      "address": "0x56520a1D0F047e748AA042975D95B6B3CD203a4d",
+      "decimals": 18,
+      "class": "equity"
+    },
+    "SPCX": {
+      "address": "0xf782226BB4B4C6F57F24D17a34c5C041482b4bE2",
+      "decimals": 18,
+      "class": "equity"
+    },
+    "AVGO": {
+      "address": "0x0458D9Fc5bd31b5Af3018Be9CfE91ecF4ABf9a7e",
+      "decimals": 18,
+      "class": "equity"
+    },
+    "TSLA": {
+      "address": "0xBA76ce34AC2c65813ee2c11F34Ad1523fE43CBac",
+      "decimals": 18,
+      "class": "equity"
+    },
+    "MSFT": {
+      "address": "0x83E43A65ce9E5aE1872a2363eD74D67C5A30fdb5",
+      "decimals": 18,
+      "class": "equity"
+    },
+    "ORCL": {
+      "address": "0x56F81D0831b9352e023266b72F38b4657baA32E8",
+      "decimals": 18,
+      "class": "equity"
+    },
+    "META": {
+      "address": "0x2767f2e94a7cF7935d59DdD7A5A30138369846e2",
+      "decimals": 18,
+      "class": "equity"
+    }
   },
   "feeds": {
-    "AUDF": "0x20dc0d8625fb1ae982d08763105cdce98e9a95ca59c4903190119c9fe88a47cd",
-    "BNB": "0x5398b2b4caab86e6c562e30f6ecb15c4b87c20ed7595ad48b4048b62005b9888",
-    "CBBTC": "0x27f98ddc32af5a6272f676d428fd004af1718c18541118dc044c0ac3a2b612fd",
-    "EURC": "0x9af29d8ae5269a47d972f6e5a188878d8e45cb2c7f7ce637492bdaef05a980be",
-    "JPYC": "0xf3570f02e056765d6c42a5b3624067f3b80c80b9d22355c71b534c24eb8ae1e9",
-    "KRW1": "0x2642c5e9691dbb5c5674a2a24ebb68e4df723f0656e3d4e2e45fa028c6caf650",
-    "PAXG": "0xb8b495d5826591b537a47841255ffbca7f1f0f56afff8f5e7bc565f1e20b338c",
-    "PYUSD": "0xd4ebce1baf00f6124f7a0bd347ef8170aaa7ce6e5dcf595879e3c61676921e99",
-    "QCAD": "0x1c9b7f4cc3a7295cb420362f039e13565a7f80f9d0b7023405023d1db74735ea",
-    "USD1": "0x4c7fec22c40835f297ef183fc68a20f5a965997cddedf9fcf5bd18b3d0898d85",
-    "USDC-USD": "0x0189091eac3c33dc88b48c58f75a1d978253e7fb2d4a1711b5701172b083c487",
-    "USDS": "0x4d9df04bbf62ab0e8418c56a2fea063a7956bc08674600862a95970c583f3be5",
-    "USDT": "0xfa722ae80d6181ca931f45c80582c173b9c19cd30c1632e864e8f48ea62a6548",
-    "WBTC": "0x63b49bbd6b259a4c3500020453ad775a8df2ff9e423fe5228644f18f495262bf",
-    "WETH": "0xacb54d59d0c847602722bfdec8aaaf92ead1385b3402cad482b3c6484a6efc1c",
-    "XAUT": "0xaf63e9c459822846879d75246ea10ee933d53a8f206c51c5150270aadd42625f",
-    "INTC": "0x058dc9a04c0ebce2bb560948628013d466bdc2bfb8042e33d4a7a0dde2045fba",
-    "AMD": "0xa6c9396c58cb1c50e6f2a6139404b148ecc7f86489d9d4faa01e3eb5228fc652",
-    "NVDA": "0x9a0882814ace331414f8c2c7cb34e815e4c7092f8de7df39bba1fc92968deb69",
-    "ASML": "0x6b434d49a41b22478b4b1d3fca59c90e5dbfc185cc1b5e2a9a3efd2f901e0c23",
-    "SPCX": "0x1729d32f332780e7a939b7ca2a73ceb60cf507d64ed28e15023dad847f50fe47",
-    "AVGO": "0x7d9c97fe812e6df01e2604baeade55e60503c8d793300e69d6da8efa52618b54",
-    "TSLA": "0x91a8aa38cb67e3a567c5b58b125e69e218c5a97677de4b4ce327a1bd281e0952",
-    "MSFT": "0x778b165de0bfe24e8806a0334dabd237c8f5844fb3d60a8d5b623d352120e784",
-    "ORCL": "0x83c6210ed83e6bbd8db6d6dd43893d46cbc0a20efce89c30f6be2ce536ea74db",
-    "META": "0x2d2201820627f4019b4ddd9d9742fc14a750d4df2f5413961e91c03e8af9581a"
+    "USDCB": "0x0000000000000000000000000000000000000000000000000648453138900000",
+    "EURC": "0x00000000000000000000000000000000000000000000000006186b6484500000",
+    "USDT": "0x0000000000000000000000000000000000000000000000000644c16484500000",
+    "USDS": "0x0000000000000000000000000000000000000000000000000639096484500000",
+    "USD1": "0x0000000000000000000000000000000000000000000000000622616484500000",
+    "PYUSD": "0x0000000000000000000000000000000000000000000000000630716484500000",
+    "QCAD": "0x0000000000000000000000000000000000000000000000000654616484500000",
+    "AUDF": "0x0000000000000000000000000000000000000000000000000654c56484500000",
+    "JPYC": "0x00000000000000000000000000000000000000000000000006558d6484500000",
+    "KRW1": "0x0000000000000000000000000000000000000000000000000655f16484500000",
+    "WETH": "0x0000000000000000000000000000000000000000000000000616a96484500000",
+    "WBTC": "0x000000000000000000000000000000000000000000000000064b016484500000",
+    "CBBTC": "0x000000000000000000000000000000000000000000000000060f3d6484500000",
+    "BNB": "0x00000000000000000000000000000000000000000000000006076d6484500000",
+    "XAUT": "0x000000000000000000000000000000000000000000000000064ee96484500000",
+    "PAXG": "0x000000000000000000000000000000000000000000000000064e856484500000",
+    "INTC": "0x000000000000000000000000000000000000000000000000001b4f6484500000",
+    "AMD": "0x0000000000000000000000000000000000000000000000000000976484500000",
+    "NVDA": "0x0000000000000000000000000000000000000000000000000027cf6484500000",
+    "ASML": "0x0000000000000000000000000000000000000000000000000004076484500000",
+    "SPCX": "0x00000000000000000000000000000000000000000000000000321a6484500000",
+    "AVGO": "0x0000000000000000000000000000000000000000000000000006eb6484500000",
+    "TSLA": "0x00000000000000000000000000000000000000000000000000358f6484500000",
+    "MSFT": "0x00000000000000000000000000000000000000000000000000238d6484500000",
+    "ORCL": "0x0000000000000000000000000000000000000000000000000028976484500000",
+    "META": "0x0000000000000000000000000000000000000000000000000023476484500000"
   },
   "calendars": {
     "usEquity": [
@@ -79,5 +187,31 @@
       "SPCX",
       "TSLA"
     ]
+  },
+  "pools": {
+    "stableCore": {
+      "address": "0xbbbBbbB9B0335cc991924E1F5b59f0d4D88f1dE0",
+      "assets": [
+        "USDCB",
+        "USDT",
+        "USDS",
+        "USD1",
+        "PYUSD"
+      ]
+    },
+    "cryptoCore": {
+      "address": "0xbbBbBBbb09Fb9E10d8C178433368e32E89aBAd4b",
+      "assets": [
+        "USDCB",
+        "USDT",
+        "WETH",
+        "WBTC",
+        "CBBTC",
+        "BNB",
+        "XAUT",
+        "PAXG",
+        "EURC"
+      ]
+    }
   }
 }

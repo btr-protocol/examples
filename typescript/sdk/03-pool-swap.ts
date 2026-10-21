@@ -15,8 +15,8 @@
  */
 import { getSwapQuote, type SwapQuote } from '@btr-protocol/sdk/pool';
 import { POOL_ABI } from '@btr-protocol/sdk/abis';
-import { deadline, floorFrom, fmt, pool, token, withRetry, type Address } from '../src/config.ts';
-import { account, approve, armed, balanceOf, call, decimalsOf, provider, send } from '../src/sdk-wallet.ts';
+import { base, baseUnits, deadline, demoLeg, floorFrom, fmt, need, withRetry, type Address } from '../src/config.ts';
+import { account, approve, armed, balanceOf, call, provider, send } from '../src/sdk-wallet.ts';
 
 export const quote = (p: Address, tokenIn: Address, tokenOut: Address, amountIn: bigint) =>
   withRetry(() => getSwapQuote(provider, p, tokenIn, tokenOut, amountIn)) as Promise<SwapQuote>;
@@ -48,27 +48,28 @@ export async function swapCalls(
 }
 
 if (import.meta.main) {
-  const p = pool('stablePool');
-  const tokenIn = token('USDCB');
-  const tokenOut = token('USDT');
-  const amountIn = 1_000n * 10n ** BigInt(await decimalsOf(tokenIn));
+  const leg = need(demoLeg(), 'pool with a non-base leg');
+  const p = leg.pool;
+  const tokenIn = base.address;
+  const tokenOut = leg.token;
+  const amountIn = baseUnits(1_000);
   const recipient = (account ?? '0x000000000000000000000000000000000000dEaD') as Address;
 
   const { q, minAmountOut, calls } = await swapCalls(p, tokenIn, tokenOut, amountIn, 50, recipient);
 
   console.log(`pool        ${p}`);
-  console.log(`amountIn    ${fmt(amountIn)} USDCB`);
-  console.log(`quoted out  ${fmt(q.amountOut)} USDT`);
-  console.log(`floor       ${fmt(minAmountOut)} USDT   (50 bps tolerance)`);
+  console.log(`amountIn    ${fmt(amountIn, base.decimals)} ${base.symbol}`);
+  console.log(`quoted out  ${fmt(q.amountOut, leg.decimals)} ${leg.symbol}`);
+  console.log(`floor       ${fmt(minAmountOut, leg.decimals)} ${leg.symbol}   (50 bps tolerance)`);
   console.log(`spread      ${q.spreadPbps} pbps        (realised fee is half of this)`);
   console.log(`mark / mid  ${fmt(q.markPrice)} / ${fmt(q.midPrice)}`);
-  console.log(`covToll     ${fmt(q.covToll)}`);
+  console.log(`covToll     ${fmt(q.covToll, leg.decimals)}`);
 
   const before = armed ? await balanceOf(tokenOut, recipient) : 0n;
   await send(calls);
   if (armed) {
     const got = (await balanceOf(tokenOut, recipient)) - before;
-    console.log(`\nfilled      ${fmt(got)} USDT`);
+    console.log(`\nfilled      ${fmt(got, leg.decimals)} ${leg.symbol}`);
     if (got < minAmountOut) throw new Error('filled below the floor: the pool should have reverted');
   }
 }

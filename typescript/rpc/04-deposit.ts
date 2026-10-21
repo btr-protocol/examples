@@ -12,8 +12,9 @@
  * Run: bun run rpc/04-deposit.ts
  */
 import { encodeFunctionData } from 'viem';
-import { fmt, pool, token, withRetry, type Address } from '../src/config.ts';
-import { POOL_ABI, armed, decimalsOf, publicClient, send, senderOrPlaceholder, type Call } from '../src/viem-client.ts';
+import { config, demoLeg, feedId, fmt, need, unitsWorth, withRetry, type Address } from '../src/config.ts';
+import { POOL_ABI, armed, publicClient, send, senderOrPlaceholder, type Call } from '../src/viem-client.ts';
+import { getFeed } from './01-oracle.ts';
 import { approveCall } from './03-pool-swap.ts';
 
 export const lpBalance = (p: Address, user: Address, tk: Address) =>
@@ -26,24 +27,40 @@ export const coverage = (p: Address, tk: Address) =>
     publicClient.readContract({ address: p, abi: POOL_ABI, functionName: 'getCoverageRatio', args: [tk] }),
   );
 
+/** Face (token units) per share, WAD: what `lpAmount * index / 1e18` converts a share count by. */
+export const liquidityIndex = (p: Address, tk: Address) =>
+  withRetry(() =>
+    publicClient.readContract({ address: p, abi: POOL_ABI, functionName: 'getAsset', args: [tk] }),
+  ).then((a) => a.liquidityIndexWad);
+
+/** Pool-wide solvency C, WAD: the rate a deposit mints at. */
+export const solvency = (p: Address) =>
+  withRetry(() =>
+    publicClient.readContract({ address: p, abi: POOL_ABI, functionName: 'poolSolvencyWad' }),
+  ).then(([c]) => c);
+
 export const depositCalls = (p: Address, tk: Address, amount: bigint): Call[] => [
   approveCall(tk, p, amount),
   { to: p, data: encodeFunctionData({ abi: POOL_ABI, functionName: 'deposit', args: [tk, amount] }), label: 'deposit' },
 ];
 
 if (import.meta.main) {
-  const p = pool('stablePool');
-  const tk = token('USDT');
-  const amount = 10_000n * 10n ** BigInt(await decimalsOf(tk));
+  const leg = need(demoLeg(), 'pool with a non-base leg');
+  const p = leg.pool;
+  const tk = leg.token;
+  // $10,000 of the leg, sized by value so the same line serves a stable and a volatile.
+  const mark = (await getFeed(config.contracts.poolFactory, feedId(leg.symbol))).mark1e18;
+  const amount = unitsWorth(mark, leg.decimals, 10_000);
   const user = senderOrPlaceholder;
 
   console.log(`pool        ${p}`);
-  // Coverage is reserves over liabilities. A deposit credits BOTH by the same value, so it moves
-  // coverage TOWARD 1.0: it lifts an under-covered leg and lowers an over-covered one. Use
-  // `donate` if the intent is to raise coverage.
-  console.log(`coverage    ${fmt(await coverage(p, tk))}`);
+  // Coverage is reserves over liabilities. A deposit mints at the pool-wide solvency C: it adds
+  // `amount` to reserves and `amount / C` of face to liabilities, so the leg's coverage moves
+  // TOWARD C (down if the leg sits above it, up if below), not toward 1.0. Use `donate` to raise
+  // coverage without diluting it.
+  console.log(`coverage    ${fmt(await coverage(p, tk))}   (pool C ${fmt(await solvency(p))})`);
   console.log(`lp before   ${fmt(await lpBalance(p, user, tk))}`);
-  console.log(`depositing  ${fmt(amount)} USDT`);
+  console.log(`depositing  ${fmt(amount, leg.decimals)} ${leg.symbol}`);
 
   await send(depositCalls(p, tk, amount));
   if (armed) console.log(`lp after    ${fmt(await lpBalance(p, user, tk))}`);

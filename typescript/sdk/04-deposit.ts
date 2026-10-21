@@ -18,9 +18,11 @@
  * Run: bun run sdk/04-deposit.ts
  */
 import { POOL_ABI } from '@btr-protocol/sdk/abis';
+import { readContract } from '@btr-protocol/sdk/eth';
 import { getCoverageRatio, getLPBalance } from '@btr-protocol/sdk/pool';
-import { fmt, pool, token, withRetry, type Address } from '../src/config.ts';
-import { account, approve, armed, call, decimalsOf, provider, send } from '../src/sdk-wallet.ts';
+import { demoLeg, feedId, fmt, need, config, unitsWorth, withRetry, type Address } from '../src/config.ts';
+import { account, approve, armed, call, provider, send } from '../src/sdk-wallet.ts';
+import { getFeed } from './01-oracle.ts';
 
 export const lpBalance = (p: Address, user: Address, tk: Address) =>
   withRetry(() => getLPBalance(provider, p, user, tk));
@@ -28,25 +30,33 @@ export const lpBalance = (p: Address, user: Address, tk: Address) =>
 export const coverage = (p: Address, tk: Address) =>
   withRetry(() => getCoverageRatio(provider, p, tk));
 
+/** Pool-wide solvency C, WAD: the rate a deposit mints at. */
+export const solvency = (p: Address) =>
+  withRetry(() => readContract<[bigint, boolean]>(provider, p, POOL_ABI, 'poolSolvencyWad', [])).then(([c]) => c);
+
 export const depositCalls = (p: Address, tk: Address, amount: bigint) => [
   approve(tk, p, amount),
   call(p, POOL_ABI, 'deposit', [tk, amount], 'deposit'),
 ];
 
 if (import.meta.main) {
-  const p = pool('stablePool');
-  const tk = token('USDT');
-  const amount = 10_000n * 10n ** BigInt(await decimalsOf(tk));
+  const leg = need(demoLeg(), 'pool with a non-base leg');
+  const p = leg.pool;
+  const tk = leg.token;
+  // $10,000 of the leg, sized by value so the same line serves a stable and a volatile.
+  const mark = (await getFeed(config.contracts.poolFactory, feedId(leg.symbol))).mark1e18;
+  const amount = unitsWorth(mark, leg.decimals, 10_000);
   const user = (account ?? '0x000000000000000000000000000000000000dEaD') as Address;
 
   console.log(`pool        ${p}`);
-  console.log(`leg         USDT ${tk}`);
-  // Coverage is reserves over liabilities. A deposit credits BOTH by the same value, so it moves
-  // coverage TOWARD 1.0: it lifts an under-covered leg and lowers an over-covered one. Depositing
-  // is not a way to improve a leg's coverage; `donate` is.
-  console.log(`coverage    ${fmt(await coverage(p, tk))}`);
+  console.log(`leg         ${leg.symbol} ${tk}`);
+  // Coverage is reserves over liabilities. A deposit mints at the pool-wide solvency C: it adds
+  // `amount` to reserves and `amount / C` of face to liabilities, so the leg's coverage moves
+  // TOWARD C (down if the leg sits above it, up if below), not toward 1.0. `donate` is the
+  // non-dilutive way to raise a leg's coverage.
+  console.log(`coverage    ${fmt(await coverage(p, tk))}   (pool C ${fmt(await solvency(p))})`);
   console.log(`lp before   ${fmt(await lpBalance(p, user, tk))}`);
-  console.log(`depositing  ${fmt(amount)} USDT`);
+  console.log(`depositing  ${fmt(amount, leg.decimals)} ${leg.symbol}`);
 
   await send(depositCalls(p, tk, amount));
 

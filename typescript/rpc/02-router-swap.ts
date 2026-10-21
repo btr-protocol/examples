@@ -21,8 +21,8 @@
  * Run: bun run rpc/02-router-swap.ts
  */
 import { encodeFunctionData } from 'viem';
-import { config, deadline, floorFrom, fmt, pool, token, type Address } from '../src/config.ts';
-import { ROUTER_ABI, armed, balanceOf, decimalsOf, send, senderOrPlaceholder, type Call } from '../src/viem-client.ts';
+import { base, config, deadline, floorFrom, fmt, need, routeSet, type Address } from '../src/config.ts';
+import { ROUTER_ABI, armed, balanceOf, send, senderOrPlaceholder, type Call } from '../src/viem-client.ts';
 import { approveCall, quote } from './03-pool-swap.ts';
 
 export interface Hop { pool: Address; tokenOut: Address }
@@ -60,46 +60,46 @@ export function routerCall(parts: Part[], floors: Floor[], recipient: Address): 
 }
 
 if (import.meta.main) {
-  const USDT = token('USDT');
-  const USDS = token('USDS');
-  const USDCB = token(config.baseToken);
-  const WETH = token('WETH');
+  const { a, a2, b } = need(routeSet(), 'two pools sharing a base, one of them with two non-base legs');
+  const tokA = a.token;
+  const tokA2 = a2.token;
+  const tokBase = base.address;
+  const tokB = b.token;
   const recipient = senderOrPlaceholder;
 
-  const dec = BigInt(await decimalsOf(USDT));
-  const inA = 1_000n * 10n ** dec;
-  const inB = 1_000n * 10n ** dec;
+  const inA = 1_000n * 10n ** BigInt(a.decimals);
+  const inB = 1_000n * 10n ** BigInt(a2.decimals);
 
   const hopsA: Hop[] = [
-    { pool: pool('stablePool'), tokenOut: USDCB },
-    { pool: pool('cryptoPool'), tokenOut: WETH },
+    { pool: a.pool, tokenOut: tokBase },
+    { pool: b.pool, tokenOut: tokB },
   ];
-  const hopsB: Hop[] = [{ pool: pool('stablePool'), tokenOut: USDCB }];
+  const hopsB: Hop[] = [{ pool: a.pool, tokenOut: tokBase }];
 
-  const outA = await quotePath(USDT, inA, hopsA);
-  const outB = await quotePath(USDS, inB, hopsB);
+  const outA = await quotePath(tokA, inA, hopsA);
+  const outB = await quotePath(tokA2, inB, hopsB);
 
   const parts: Part[] = [
-    { tokenIn: USDT, amountIn: inA, hops: hopsA },
-    { tokenIn: USDS, amountIn: inB, hops: hopsB },
+    { tokenIn: tokA, amountIn: inA, hops: hopsA },
+    { tokenIn: tokA2, amountIn: inB, hops: hopsB },
   ];
   const floors: Floor[] = [
-    { token: WETH, minOut: floorFrom(outA, 100) },
-    { token: USDCB, minOut: floorFrom(outB, 100) },
+    { token: tokB, minOut: floorFrom(outA, 100) },
+    { token: tokBase, minOut: floorFrom(outB, 100) },
   ];
 
   console.log(`router      ${config.contracts.router}`);
-  console.log(`part A      ${fmt(inA)} USDT -> USDCB -> WETH   expect ${fmt(outA)} WETH`);
-  console.log(`part B      ${fmt(inB)} USDS -> USDCB           expect ${fmt(outB)} USDCB`);
+  console.log(`part A      ${fmt(inA, a.decimals)} ${a.symbol} -> ${base.symbol} -> ${b.symbol}   expect ${fmt(outA, b.decimals)} ${b.symbol}`);
+  console.log(`part B      ${fmt(inB, a2.decimals)} ${a2.symbol} -> ${base.symbol}   expect ${fmt(outB, base.decimals)} ${base.symbol}`);
 
-  const before = armed ? [await balanceOf(WETH, recipient), await balanceOf(USDCB, recipient)] : [0n, 0n];
+  const before = armed ? [await balanceOf(tokB, recipient), await balanceOf(tokBase, recipient)] : [0n, 0n];
   await send([
-    approveCall(USDT, config.contracts.router, inA),
-    approveCall(USDS, config.contracts.router, inB),
+    approveCall(tokA, config.contracts.router, inA),
+    approveCall(tokA2, config.contracts.router, inB),
     routerCall(parts, floors, recipient),
   ]);
   if (armed) {
-    console.log(`\nreceived    ${fmt((await balanceOf(WETH, recipient)) - before[0])} WETH, ` +
-      `${fmt((await balanceOf(USDCB, recipient)) - before[1])} USDCB`);
+    console.log(`\nreceived    ${fmt((await balanceOf(tokB, recipient)) - before[0], b.decimals)} ${b.symbol}, ` +
+      `${fmt((await balanceOf(tokBase, recipient)) - before[1], base.decimals)} ${base.symbol}`);
   }
 }

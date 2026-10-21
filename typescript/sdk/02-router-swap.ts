@@ -22,8 +22,8 @@
  * Run: bun run sdk/02-router-swap.ts
  */
 import { ROUTER_ABI } from '@btr-protocol/sdk/abis';
-import { config, deadline, floorFrom, fmt, pool, token, type Address } from '../src/config.ts';
-import { account, approve, armed, balanceOf, call, decimalsOf, send } from '../src/sdk-wallet.ts';
+import { base, config, deadline, floorFrom, fmt, need, routeSet, type Address } from '../src/config.ts';
+import { account, approve, armed, balanceOf, call, send } from '../src/sdk-wallet.ts';
 import { quote } from './03-pool-swap.ts';
 
 export interface Hop { pool: Address; tokenOut: Address }
@@ -73,61 +73,61 @@ export function routerCall(parts: Part[], floors: Floor[], recipient: Address) {
 }
 
 if (import.meta.main) {
-  const USDT = token('USDT');
-  const USDS = token('USDS');
-  const USDCB = token(config.baseToken);
-  const WETH = token('WETH');
-  const stable = pool('stablePool');
-  const crypto = pool('cryptoPool');
+  const { a, a2, b } = need(routeSet(), 'two pools sharing a base, one of them with two non-base legs');
+  const tokA = a.token;
+  const tokA2 = a2.token;
+  const tokBase = base.address;
+  const tokB = b.token;
+  const stable = a.pool;
+  const crypto = b.pool;
   const recipient = (account ?? '0x000000000000000000000000000000000000dEaD') as Address;
 
-  const dec = BigInt(await decimalsOf(USDT));
-  const inA = 1_000n * 10n ** dec;
-  const inB = 1_000n * 10n ** dec;
+  const inA = 1_000n * 10n ** BigInt(a.decimals);
+  const inB = 1_000n * 10n ** BigInt(a2.decimals);
 
-  // Part A crosses TWO pools. Neither holds both ends: USDCB is the shared base, so the route is
+  // Part A crosses TWO pools. Neither holds both ends: the base is shared, so the route is
   // only expressible as a chain, and by hand it is two approvals, two signatures and an unhedged
-  // USDCB position in between.
+  // base position in between.
   const hopsA: Hop[] = [
-    { pool: stable, tokenOut: USDCB },
-    { pool: crypto, tokenOut: WETH },
+    { pool: stable, tokenOut: tokBase },
+    { pool: crypto, tokenOut: tokB },
   ];
   // Part B is a plain single hop with a different input. Parts run IN ORDER but do NOT feed each
   // other: this is a split, not a chain.
-  const hopsB: Hop[] = [{ pool: stable, tokenOut: USDCB }];
+  const hopsB: Hop[] = [{ pool: stable, tokenOut: tokBase }];
 
-  const [outA, outB] = [await quotePath(USDT, inA, hopsA), await quotePath(USDS, inB, hopsB)];
+  const [outA, outB] = [await quotePath(tokA, inA, hopsA), await quotePath(tokA2, inB, hopsB)];
 
   const parts: Part[] = [
-    { tokenIn: USDT, amountIn: inA, hops: hopsA },
-    { tokenIn: USDS, amountIn: inB, hops: hopsB },
+    { tokenIn: tokA, amountIn: inA, hops: hopsA },
+    { tokenIn: tokA2, amountIn: inB, hops: hopsB },
   ];
-  // WETH is part A's terminal, USDCB is part B's. The USDCB that part A produced is NOT claimable:
+  // Part A's terminal is the far leg, part B's is the base. The base that part A produced is NOT claimable:
   // part A consumed it in its second hop.
   const floors: Floor[] = [
-    { token: WETH, minOut: floorFrom(outA, 100) },
-    { token: USDCB, minOut: floorFrom(outB, 100) },
+    { token: tokB, minOut: floorFrom(outA, 100) },
+    { token: tokBase, minOut: floorFrom(outB, 100) },
   ];
 
   console.log(`router      ${config.contracts.router}`);
-  console.log(`part A      ${fmt(inA)} USDT -> USDCB -> WETH   expect ${fmt(outA)} WETH`);
-  console.log(`part B      ${fmt(inB)} USDS -> USDCB           expect ${fmt(outB)} USDCB`);
-  console.log(`floors      WETH >= ${fmt(floors[0].minOut)}, USDCB >= ${fmt(floors[1].minOut)}`);
+  console.log(`part A      ${fmt(inA, a.decimals)} ${a.symbol} -> ${base.symbol} -> ${b.symbol}   expect ${fmt(outA, b.decimals)} ${b.symbol}`);
+  console.log(`part B      ${fmt(inB, a2.decimals)} ${a2.symbol} -> ${base.symbol}   expect ${fmt(outB, base.decimals)} ${base.symbol}`);
+  console.log(`floors      ${b.symbol} >= ${fmt(floors[0].minOut, b.decimals)}, ${base.symbol} >= ${fmt(floors[1].minOut, base.decimals)}`);
 
   const before = armed
-    ? [await balanceOf(WETH, recipient), await balanceOf(USDCB, recipient)]
+    ? [await balanceOf(tokB, recipient), await balanceOf(tokBase, recipient)]
     : [0n, 0n];
 
   await send([
-    approve(USDT, config.contracts.router, inA),
-    approve(USDS, config.contracts.router, inB),
+    approve(tokA, config.contracts.router, inA),
+    approve(tokA2, config.contracts.router, inB),
     routerCall(parts, floors, recipient),
   ]);
 
   if (armed) {
-    const gotW = (await balanceOf(WETH, recipient)) - before[0];
-    const gotU = (await balanceOf(USDCB, recipient)) - before[1];
-    console.log(`\nreceived    ${fmt(gotW)} WETH, ${fmt(gotU)} USDCB`);
+    const gotW = (await balanceOf(tokB, recipient)) - before[0];
+    const gotU = (await balanceOf(tokBase, recipient)) - before[1];
+    console.log(`\nreceived    ${fmt(gotW, b.decimals)} ${b.symbol}, ${fmt(gotU, base.decimals)} ${base.symbol}`);
     if (gotW < floors[0].minOut || gotU < floors[1].minOut) throw new Error('filled below a floor');
   }
 }

@@ -16,7 +16,7 @@
  * Run: bun run rpc/01-oracle.ts
  */
 import {
-  config, feedId, fmt, followsUsEquityCalendar, usMarketOpen, withRetry, type Hex,
+  config, feedId, fmt, followsUsEquityCalendar, legs, usMarketOpen, withRetry, type Hex,
 } from '../src/config.ts';
 import { ORACLE_ABI, publicClient } from '../src/viem-client.ts';
 
@@ -85,9 +85,10 @@ export async function readAgreedMark(id: Hex, maxDivergenceBps = 100) {
 /**
  * The same three-way verdict as the SDK twin, transcribed. `live` | `closed` | `incident`.
  *
- * Crypto and FX trade continuously, so a stale WETH, EURC or JPYC feed is unconditionally an
- * incident. An equity feed is stale for most of the week BY DESIGN: the US cash session is about
- * 30% of it, and the keeper does not heartbeat a frozen record. Page on `incident` only.
+ * Crypto, FX and stables trade continuously, so a stale feed of those classes is unconditionally
+ * an incident. A feed on the US equity calendar is stale for most of the week BY DESIGN: the US
+ * cash session is about 30% of it, and the keeper does not heartbeat a frozen record. Page on
+ * `incident` only.
  */
 export type Verdict = 'live' | 'closed' | 'incident';
 
@@ -103,9 +104,9 @@ export function classify(symbol: string, f: Feed, nowSecs = Date.now() / 1000) {
 
 if (import.meta.main) {
   console.log(`${config.name} (chain ${config.chainId}), no SDK\n`);
-  // FX (ttl 3600) beside equities and crypto (ttl 600). Same struct, three different meanings for
-  // the same age in seconds.
-  for (const s of ['EURC', 'JPYC', 'NVDA', 'ASML', 'TSLA', 'WETH']) {
+  // Every token the pools hold. Same struct, different meanings for the same age in seconds:
+  // a stable or FX feed has the long ttl, crypto the short one, an equity may be closed.
+  for (const s of [config.baseToken, ...new Set(legs.map((l) => l.symbol))]) {
     const id = feedId(s);
     const raw = await getFeed(config.contracts.poolFactory, id);
     const st = classify(s, raw);

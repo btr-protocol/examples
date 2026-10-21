@@ -5,31 +5,45 @@
  * call compiled. Real contracts, real marks, real inventories; a throwaway prefunded account and
  * a clean slate each run, so nothing here needs a funded key.
  *
- * Run: bun run test:fork      (never `bun test test/fork` directly: it needs the anvil harness)
+ * Legs come from the config. A chain without an FX pool, without equities, or whose legs are
+ * gated to an allowlist the throwaway account is not on, SKIPS those tests, reason in the name.
+ *
+ * Run: BTR_CHAIN_ID=<id> bun run test:fork   (never `bun test test/fork` directly: it needs the anvil harness)
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { encodeFunctionData } from 'viem';
-import { config, deadline, diffBps, fmt, impliedWad, pool, token, type Address } from '../../src/config.ts';
-import { POOL_ABI, account, armed, balanceOf, decimalsOf, publicClient, send } from '../../src/viem-client.ts';
+import {
+  base, baseUnits, config, deadline, demoLeg, diffBps, fmt, impliedWad, legPair, legsOf, routeSet, type Address,
+} from '../../src/config.ts';
+import { POOL_ABI, account, armed, balanceOf, publicClient, send } from '../../src/viem-client.ts';
 import * as sdkSwap from '../../sdk/03-pool-swap.ts';
 import * as rpcSwap from '../../rpc/03-pool-swap.ts';
 import * as sdkRouter from '../../sdk/02-router-swap.ts';
 import * as rpcRouter from '../../rpc/02-router-swap.ts';
+import { gatedForAny, testIf, worth } from '../support.ts';
 import { deal, revert, snapshot } from './helpers.ts';
 
-const USDCB = token(config.baseToken);
-const USDT = token('USDT');
-const USDS = token('USDS');
-const WETH = token('WETH');
-const EURC = token('EURC');
-const JPYC = token('JPYC');
-const NVDA = token('NVDA');
-const TSLA = token('TSLA');
-const stable = pool('stablePool');
-const crypto = pool('cryptoPool');
-const fx = pool('fxPool');
-const stocks = pool('stocksPool');
-const ONE_K = 1_000n * 10n ** 18n;
+const first = demoLeg();
+const spokes = legPair('stable') ?? legPair();
+const volatile = legsOf('volatile')[0];
+const fx = legsOf('fx')[0];
+const equity = legsOf('equity')[0];
+const equityPair = legPair('equity');
+const route = routeSet();
+const ONE_K = baseUnits(1_000);
+const thinBps = 500; // a thin leg moves on a trade; a decimals bug is out by orders of magnitude
+
+// Swaps against a gated leg revert for an account not on the allowlist, for a reason unrelated to
+// the code under test. Resolve it once, up front, so the test can be skipped with the reason.
+const gate = {
+  first: await gatedForAny('swap', first),
+  spokes: await gatedForAny('swap', ...(spokes ?? [])),
+  volatile: await gatedForAny('swap', volatile),
+  fx: await gatedForAny('swap', fx),
+  equity: await gatedForAny('swap', equity),
+  equityPair: await gatedForAny('swap', ...(equityPair ?? [])),
+  route: await gatedForAny('swap', ...(route ? [route.a, route.a2, route.b] : [])),
+};
 
 let me: Address;
 let snap: string;
@@ -50,228 +64,241 @@ afterEach(async () => {
 });
 
 describe('example 3: swap directly against one pool', () => {
-  test('SDK path fills at or above the floor', async () => {
-    await deal(USDCB, me, ONE_K * 10n);
-    const before = await balanceOf(USDT, me);
+  testIf(first && !gate.first, gate.first ?? 'no pool holds a non-base leg')('SDK path fills at or above the floor', async () => {
+    const leg = first!;
+    await deal(base.address, me, ONE_K * 10n);
+    const before = await balanceOf(leg.token, me);
 
-    const { q, minAmountOut, calls } = await sdkSwap.swapCalls(stable, USDCB, USDT, ONE_K, 50, me);
+    const { q, minAmountOut, calls } = await sdkSwap.swapCalls(leg.pool, base.address, leg.token, ONE_K, 50, me);
     await send(calls);
 
-    const got = (await balanceOf(USDT, me)) - before;
+    const got = (await balanceOf(leg.token, me)) - before;
     expect(got).toBeGreaterThanOrEqual(minAmountOut);
     // CLOSE TO, NOT EQUAL TO, the quote. Off chain the approval mines its own block, so the swap
     // is priced one block later than the quote, and the spread carries a time-dependent staleness
     // premium. Only a same-transaction quote (the Solidity twin) is exact. Budget for this: an
     // off-chain integration that asserts quote == fill will flake.
-    const drift = got > q.amountOut ? got - q.amountOut : q.amountOut - got;
-    expect(Number((drift * 10_000n) / q.amountOut)).toBeLessThan(10); // < 10 bps
-    console.log(`    filled ${fmt(got)} USDT for ${fmt(ONE_K)} USDCB`);
+    expect(diffBps(got, q.amountOut)).toBeLessThan(10);
+    console.log(`    filled ${fmt(got, leg.decimals)} ${leg.symbol} for ${fmt(ONE_K, base.decimals)} ${base.symbol}`);
   }, 120_000);
 
-  test('vanilla JSON-RPC path fills identically', async () => {
-    await deal(USDCB, me, ONE_K * 10n);
-    const before = await balanceOf(USDS, me);
+  testIf(spokes && !gate.spokes, gate.spokes ?? 'no pool holds two non-base legs')('vanilla JSON-RPC path fills identically', async () => {
+    const leg = spokes![1];
+    await deal(base.address, me, ONE_K * 10n);
+    const before = await balanceOf(leg.token, me);
 
-    const { q, minAmountOut, calls } = await rpcSwap.swapCalls(stable, USDCB, USDS, ONE_K, 50, me);
+    const { q, minAmountOut, calls } = await rpcSwap.swapCalls(leg.pool, base.address, leg.token, ONE_K, 50, me);
     await send(calls);
 
-    const got = (await balanceOf(USDS, me)) - before;
+    const got = (await balanceOf(leg.token, me)) - before;
     expect(got).toBeGreaterThanOrEqual(minAmountOut);
-    const drift = got > q.amountOut ? got - q.amountOut : q.amountOut - got;
-    expect(Number((drift * 10_000n) / q.amountOut)).toBeLessThan(10);
-    console.log(`    filled ${fmt(got)} USDS for ${fmt(ONE_K)} USDCB`);
+    expect(diffBps(got, q.amountOut)).toBeLessThan(10);
+    console.log(`    filled ${fmt(got, leg.decimals)} ${leg.symbol} for ${fmt(ONE_K, base.decimals)} ${base.symbol}`);
   }, 120_000);
 
-  test('stable to volatile lands within 2% of the pool mark', async () => {
-    await deal(USDCB, me, ONE_K * 10n);
-    const before = await balanceOf(WETH, me);
+  testIf(volatile && !gate.volatile, gate.volatile ?? 'no pool holds a volatile leg')('base to volatile lands within 2% of the pool mark', async () => {
+    const leg = volatile!;
+    const amountIn = ONE_K * 5n;
+    await deal(base.address, me, ONE_K * 10n);
+    const before = await balanceOf(leg.token, me);
 
-    const { q, calls } = await sdkSwap.swapCalls(crypto, USDCB, WETH, ONE_K * 5n, 100, me);
+    const { q, calls } = await sdkSwap.swapCalls(leg.pool, base.address, leg.token, amountIn, 100, me);
     await send(calls);
 
-    const got = (await balanceOf(WETH, me)) - before;
+    const got = (await balanceOf(leg.token, me)) - before;
     expect(got).toBeGreaterThan(0n);
-    const implied = (got * 10n ** 18n) / (ONE_K * 5n);
-    const diff = implied > q.markPrice ? implied - q.markPrice : q.markPrice - implied;
-    expect(Number((diff * 10_000n) / q.markPrice)).toBeLessThan(200);
-    console.log(`    filled ${fmt(got)} WETH for ${fmt(ONE_K * 5n)} USDCB`);
+    expect(diffBps(impliedWad(amountIn, base.decimals, got, leg.decimals), q.markPrice)).toBeLessThan(200);
+    console.log(`    filled ${fmt(got, leg.decimals)} ${leg.symbol} for ${fmt(amountIn, base.decimals)} ${base.symbol}`);
   }, 120_000);
 
-  test('an unreachable floor reverts instead of filling short', async () => {
-    await deal(USDCB, me, ONE_K * 10n);
-    const q = await sdkSwap.quote(stable, USDCB, USDT, ONE_K);
-    await send([rpcSwap.approveCall(USDCB, stable, ONE_K)]);
+  testIf(first && !gate.first, gate.first ?? 'no pool holds a non-base leg')('an unreachable floor reverts instead of filling short', async () => {
+    const leg = first!;
+    await deal(base.address, me, ONE_K * 10n);
+    const q = await sdkSwap.quote(leg.pool, base.address, leg.token, ONE_K);
+    await send([rpcSwap.approveCall(base.address, leg.pool, ONE_K)]);
 
     // Demanding double the quote must revert. Simulated, so the assertion is about the pool's
     // behaviour rather than about a gas estimate.
     await expect(
       publicClient.simulateContract({
-        address: stable, abi: POOL_ABI, functionName: 'swap_qe',
-        args: [USDCB, USDT, ONE_K, q.amountOut * 2n, me, deadline()], account: me,
+        address: leg.pool, abi: POOL_ABI, functionName: 'swap_qe',
+        args: [base.address, leg.token, ONE_K, q.amountOut * 2n, me, deadline()], account: me,
       }),
     ).rejects.toThrow();
 
     // And the honest floor clears, so the revert above was the floor and not something else.
-    const before = await balanceOf(USDT, me);
+    const before = await balanceOf(leg.token, me);
     await send([{
-      to: stable,
+      to: leg.pool,
       data: encodeFunctionData({
         abi: POOL_ABI, functionName: 'swap_qe',
-        args: [USDCB, USDT, ONE_K, (q.amountOut * 99n) / 100n, me, deadline()],
+        args: [base.address, leg.token, ONE_K, (q.amountOut * 99n) / 100n, me, deadline()],
       }),
       label: 'swap',
     }]);
-    expect((await balanceOf(USDT, me)) - before).toBeGreaterThan(0n);
+    expect((await balanceOf(leg.token, me)) - before).toBeGreaterThan(0n);
   }, 120_000);
 });
 
 describe('example 2: multi-hop, multi-part route through the Router', () => {
-  test('SDK path: two hops across two pools, one signature', async () => {
-    await deal(USDT, me, ONE_K * 10n);
-    const before = await balanceOf(WETH, me);
-    const usdcbBefore = await balanceOf(USDCB, me);
+  // Part A crosses two pools: a -> base (pool 1), base -> b (pool 2). Part B stays in pool 1.
+  const amountOf = (decimals: number) => 1_000n * 10n ** BigInt(decimals);
 
-    const hops = [{ pool: stable, tokenOut: USDCB }, { pool: crypto, tokenOut: WETH }];
-    const expected = await sdkRouter.quotePath(USDT, ONE_K, hops);
-    const parts = [{ tokenIn: USDT, amountIn: ONE_K, hops }];
-    const floors = [{ token: WETH, minOut: (expected * 99n) / 100n }];
+  testIf(route && !gate.route, gate.route ?? 'needs two pools sharing a base, one with two non-base legs')('SDK path: two hops across two pools, one signature', async () => {
+    const { a, b } = route!;
+    const amountIn = amountOf(a.decimals);
+    await deal(a.token, me, amountIn * 10n);
+    const before = await balanceOf(b.token, me);
+    const baseBefore = await balanceOf(base.address, me);
+
+    const hops = [{ pool: a.pool, tokenOut: base.address }, { pool: b.pool, tokenOut: b.token }];
+    const expected = await sdkRouter.quotePath(a.token, amountIn, hops);
+    const parts = [{ tokenIn: a.token, amountIn, hops }];
+    const floors = [{ token: b.token, minOut: (expected * 99n) / 100n }];
 
     await send([
-      rpcSwap.approveCall(USDT, config.contracts.router, ONE_K),
+      rpcSwap.approveCall(a.token, config.contracts.router, amountIn),
       sdkRouter.routerCall(parts, floors, me),
     ]);
 
-    const got = (await balanceOf(WETH, me)) - before;
+    const got = (await balanceOf(b.token, me)) - before;
     expect(got).toBeGreaterThanOrEqual(floors[0].minOut);
-    // The intermediate must never reach the recipient: USDCB is consumed inside the route.
-    expect(await balanceOf(USDCB, me)).toBe(usdcbBefore);
-    console.log(`    routed ${fmt(ONE_K)} USDT -> USDCB -> ${fmt(got)} WETH`);
+    // The intermediate must never reach the recipient: the base is consumed inside the route.
+    expect(await balanceOf(base.address, me)).toBe(baseBefore);
+    console.log(`    routed ${fmt(amountIn, a.decimals)} ${a.symbol} -> ${base.symbol} -> ${fmt(got, b.decimals)} ${b.symbol}`);
   }, 120_000);
 
-  test('vanilla path: two parts, two inputs, two output tokens, one call', async () => {
-    await deal(USDT, me, ONE_K * 10n);
-    await deal(USDS, me, ONE_K * 10n);
-    const beforeW = await balanceOf(WETH, me);
-    const beforeU = await balanceOf(USDCB, me);
+  testIf(route && !gate.route, gate.route ?? 'needs two pools sharing a base, one with two non-base legs')('vanilla path: two parts, two inputs, two output tokens, one call', async () => {
+    const { a, a2, b } = route!;
+    // Parts run in order against the SAME pools: part B is priced after part A has moved
+    // them, so its independent quote is only a fair floor while the parts are small next to the
+    // pool. 100 units each, 3% tolerance.
+    const inA = amountOf(a.decimals) / 10n;
+    const inB = amountOf(a2.decimals) / 10n;
+    await deal(a.token, me, inA * 10n);
+    await deal(a2.token, me, inB * 10n);
+    const beforeB = await balanceOf(b.token, me);
+    const beforeBase = await balanceOf(base.address, me);
 
-    const hopsA = [{ pool: stable, tokenOut: USDCB }, { pool: crypto, tokenOut: WETH }];
-    const hopsB = [{ pool: stable, tokenOut: USDCB }];
-    const outA = await rpcRouter.quotePath(USDT, ONE_K, hopsA);
-    const outB = await rpcRouter.quotePath(USDS, ONE_K, hopsB);
+    const hopsA = [{ pool: a.pool, tokenOut: base.address }, { pool: b.pool, tokenOut: b.token }];
+    const hopsB = [{ pool: a.pool, tokenOut: base.address }];
+    const outA = await rpcRouter.quotePath(a.token, inA, hopsA);
+    const outB = await rpcRouter.quotePath(a2.token, inB, hopsB);
 
     const parts = [
-      { tokenIn: USDT, amountIn: ONE_K, hops: hopsA },
-      { tokenIn: USDS, amountIn: ONE_K, hops: hopsB },
+      { tokenIn: a.token, amountIn: inA, hops: hopsA },
+      { tokenIn: a2.token, amountIn: inB, hops: hopsB },
     ];
     const floors = [
-      { token: WETH, minOut: (outA * 99n) / 100n },
-      { token: USDCB, minOut: (outB * 99n) / 100n },
+      { token: b.token, minOut: (outA * 97n) / 100n },
+      { token: base.address, minOut: (outB * 97n) / 100n },
     ];
 
     await send([
-      rpcSwap.approveCall(USDT, config.contracts.router, ONE_K),
-      rpcSwap.approveCall(USDS, config.contracts.router, ONE_K),
+      rpcSwap.approveCall(a.token, config.contracts.router, inA),
+      rpcSwap.approveCall(a2.token, config.contracts.router, inB),
       rpcRouter.routerCall(parts, floors, me),
     ]);
 
-    const gotW = (await balanceOf(WETH, me)) - beforeW;
-    const gotU = (await balanceOf(USDCB, me)) - beforeU;
-    expect(gotW).toBeGreaterThanOrEqual(floors[0].minOut);
-    expect(gotU).toBeGreaterThanOrEqual(floors[1].minOut);
-    console.log(`    part A -> ${fmt(gotW)} WETH, part B -> ${fmt(gotU)} USDCB`);
+    const gotFar = (await balanceOf(b.token, me)) - beforeB;
+    const gotBase = (await balanceOf(base.address, me)) - beforeBase;
+    expect(gotFar).toBeGreaterThanOrEqual(floors[0].minOut);
+    expect(gotBase).toBeGreaterThanOrEqual(floors[1].minOut);
+    console.log(`    part A -> ${fmt(gotFar, b.decimals)} ${b.symbol}, part B -> ${fmt(gotBase, base.decimals)} ${base.symbol}`);
   }, 120_000);
 
-  test('an unreachable end-to-end floor reverts the WHOLE route', async () => {
-    await deal(USDT, me, ONE_K * 10n);
-    const hops = [{ pool: stable, tokenOut: USDCB }, { pool: crypto, tokenOut: WETH }];
-    const expected = await sdkRouter.quotePath(USDT, ONE_K, hops);
-    const parts = [{ tokenIn: USDT, amountIn: ONE_K, hops }];
-    const floors = [{ token: WETH, minOut: expected * 2n }];
+  testIf(route && !gate.route, gate.route ?? 'needs two pools sharing a base, one with two non-base legs')('an unreachable end-to-end floor reverts the WHOLE route', async () => {
+    const { a, b } = route!;
+    const amountIn = amountOf(a.decimals);
+    await deal(a.token, me, amountIn * 10n);
+    const hops = [{ pool: a.pool, tokenOut: base.address }, { pool: b.pool, tokenOut: b.token }];
+    const expected = await sdkRouter.quotePath(a.token, amountIn, hops);
+    const parts = [{ tokenIn: a.token, amountIn, hops }];
+    const floors = [{ token: b.token, minOut: expected * 2n }];
 
-    await send([rpcSwap.approveCall(USDT, config.contracts.router, ONE_K)]);
-    const held = await balanceOf(USDT, me);
+    await send([rpcSwap.approveCall(a.token, config.contracts.router, amountIn)]);
+    const held = await balanceOf(a.token, me);
     await expect(send([sdkRouter.routerCall(parts, floors, me)])).rejects.toThrow();
     // A reverted route leaves the input intact.
-    expect(await balanceOf(USDT, me)).toBe(held);
+    expect(await balanceOf(a.token, me)).toBe(held);
   }, 120_000);
 });
 
-describe('example 3 on the FX pool: a 6-decimal leg and a sub-unit price', () => {
-  // EURC is 6 decimals against USDCB's 18. Everything below normalises before it compares, and
-  // the floor is derived from the quote rather than from the input amount, which is the only way
-  // a floor means anything across a decimals boundary.
-  test('USDCB to EURC fills at or above the floor', async () => {
-    await deal(USDCB, me, ONE_K * 10n);
-    const decOut = await decimalsOf(EURC);
-    expect(decOut).toBe(6);
-    const before = await balanceOf(EURC, me);
+describe('example 3 on an FX leg: a short-decimals token and a sub-unit price', () => {
+  // The token may have fewer decimals than the base. Everything below normalises before it
+  // compares, and the floor is derived from the quote rather than from the input amount, which is
+  // the only way a floor means anything across a decimals boundary.
+  testIf(fx && !gate.fx, gate.fx ?? 'no pool holds an FX leg')('base to an FX leg fills at or above the floor', async () => {
+    const leg = fx!;
+    const amountIn = baseUnits(100); // FX legs can be shallow
+    await deal(base.address, me, ONE_K * 10n);
+    const before = await balanceOf(leg.token, me);
 
-    const { q, minAmountOut, calls } = await sdkSwap.swapCalls(fx, USDCB, EURC, ONE_K, 50, me);
+    const { q, minAmountOut, calls } = await sdkSwap.swapCalls(leg.pool, base.address, leg.token, amountIn, 50, me);
     await send(calls);
 
-    const got = (await balanceOf(EURC, me)) - before;
+    const got = (await balanceOf(leg.token, me)) - before;
     expect(got).toBeGreaterThanOrEqual(minAmountOut);
     expect(got).toBeGreaterThan(0n);
-    // Normalised, the fill sits within 2% of the pool mark. Compared raw it would be out by 1e12,
-    // and a test that only asserted `got > 0` would never notice.
-    const implied = impliedWad(ONE_K, 18, got, decOut);
-    expect(diffBps(implied, q.markPrice)).toBeLessThan(200);
-    console.log(`    filled ${fmt(got, decOut)} EURC for ${fmt(ONE_K)} USDCB`);
+    // Normalised, the fill sits near the pool mark. Compared raw it would be out by orders of
+    // magnitude on a short-decimals leg, and a test that only asserted `got > 0` would never notice.
+    expect(diffBps(impliedWad(amountIn, base.decimals, got, leg.decimals), q.markPrice)).toBeLessThan(thinBps);
+    console.log(`    filled ${fmt(got, leg.decimals)} ${leg.symbol} for ${fmt(amountIn, base.decimals)} ${base.symbol}`);
   }, 120_000);
 
-  test('USDCB to JPYC fills a six-figure token amount for a four-figure input', async () => {
-    await deal(USDCB, me, ONE_K * 10n);
-    const decOut = await decimalsOf(JPYC);
-    const before = await balanceOf(JPYC, me);
-
-    const { q, minAmountOut, calls } = await rpcSwap.swapCalls(fx, USDCB, JPYC, ONE_K, 50, me);
+  testIf(fx && !gate.fx, gate.fx ?? 'no pool holds an FX leg')('a sub-unit FX price fills a larger token amount than the input', async () => {
+    const leg = fx!;
+    const amountIn = baseUnits(100);
+    const q = await sdkSwap.quote(leg.pool, base.address, leg.token, amountIn);
+    if (q.markPrice <= 10n * 10n ** 18n) {
+      console.log(`    SKIPPED: ${leg.symbol} is not a sub-unit price (mark ${fmt(q.markPrice)} per ${base.symbol})`);
+      return;
+    }
+    await deal(base.address, me, ONE_K * 10n);
+    const before = await balanceOf(leg.token, me);
+    const { minAmountOut, calls } = await rpcSwap.swapCalls(leg.pool, base.address, leg.token, amountIn, 50, me);
     await send(calls);
-
-    const got = (await balanceOf(JPYC, me)) - before;
+    const got = (await balanceOf(leg.token, me)) - before;
     expect(got).toBeGreaterThanOrEqual(minAmountOut);
-    // ~159k JPYC out of 1k USDCB in: the output is two orders of magnitude ABOVE the input, which
-    // is exactly the direction a naive slippage helper written for stables gets wrong.
-    expect(got).toBeGreaterThan(ONE_K * 100n);
-    const implied = impliedWad(ONE_K, 18, got, decOut);
-    expect(diffBps(implied, q.markPrice)).toBeLessThan(200);
-    console.log(`    filled ${fmt(got, decOut)} JPYC for ${fmt(ONE_K)} USDCB`);
+    // The output dwarfs the input: exactly the direction a slippage helper written for stables gets wrong.
+    expect(got / 10n ** BigInt(leg.decimals)).toBeGreaterThan(amountIn / 10n ** BigInt(base.decimals));
   }, 120_000);
 });
 
-describe('example 3 on the stocks pool: tokenised equities', () => {
-  test('USDCB to NVDA fills at or above the floor', async () => {
-    await deal(USDCB, me, ONE_K * 10n);
-    const decOut = await decimalsOf(NVDA);
-    const before = await balanceOf(NVDA, me);
+describe('example 3 on an equity leg: tokenised equities', () => {
+  testIf(equity && !gate.equity, gate.equity ?? 'no pool holds an equity leg')('base to equity fills at or above the floor', async () => {
+    const leg = equity!;
+    await deal(base.address, me, ONE_K * 10n);
+    const before = await balanceOf(leg.token, me);
 
-    const { q, minAmountOut, calls } = await sdkSwap.swapCalls(stocks, USDCB, NVDA, ONE_K, 100, me);
+    const { q, minAmountOut, calls } = await sdkSwap.swapCalls(leg.pool, base.address, leg.token, ONE_K, 100, me);
     await send(calls);
 
-    const got = (await balanceOf(NVDA, me)) - before;
+    const got = (await balanceOf(leg.token, me)) - before;
     expect(got).toBeGreaterThanOrEqual(minAmountOut);
-    // A share is worth hundreds of dollars, so 1000 USDCB buys single-digit units. The output is
+    // A share is worth hundreds of dollars, so 1000 base buys single-digit units. The output is
     // two orders of magnitude BELOW the input; asserting "out >= in * something" fails here.
-    expect(got).toBeLessThan(ONE_K / 100n);
     expect(got).toBeGreaterThan(0n);
-    const implied = impliedWad(ONE_K, 18, got, decOut);
-    expect(diffBps(implied, q.markPrice)).toBeLessThan(200);
-    console.log(`    filled ${fmt(got, decOut)} NVDA for ${fmt(ONE_K)} USDCB`);
+    expect(diffBps(impliedWad(ONE_K, base.decimals, got, leg.decimals), q.markPrice)).toBeLessThan(200);
+    console.log(`    filled ${fmt(got, leg.decimals)} ${leg.symbol} for ${fmt(ONE_K, base.decimals)} ${base.symbol}`);
   }, 120_000);
 
-  test('equity to equity is one call and never pays the intermediate out', async () => {
-    await deal(NVDA, me, 10n * 10n ** 18n);
-    const usdcbBefore = await balanceOf(USDCB, me);
-    const before = await balanceOf(TSLA, me);
-    const amountIn = 10n ** 18n; // 1 NVDA
+  testIf(equityPair && !gate.equityPair, gate.equityPair ?? 'no pool holds two equity legs')('equity to equity is one call and never pays the intermediate out', async () => {
+    const [a, b] = equityPair!;
+    const amountIn = await worth(a.symbol, 1_000);
+    await deal(a.token, me, amountIn * 10n);
+    const baseBefore = await balanceOf(base.address, me);
+    const before = await balanceOf(b.token, me);
 
-    const { q, minAmountOut, calls } = await rpcSwap.swapCalls(stocks, NVDA, TSLA, amountIn, 100, me);
-    expect(q.routeHops.length).toBe(3); // NVDA -> USDCB -> TSLA, inside one pool call
+    const { q, minAmountOut, calls } = await rpcSwap.swapCalls(a.pool, a.token, b.token, amountIn, 100, me);
+    expect(q.routeHops.length).toBe(3); // a -> base -> b, inside one pool call
     await send(calls);
 
-    const got = (await balanceOf(TSLA, me)) - before;
+    const got = (await balanceOf(b.token, me)) - before;
     expect(got).toBeGreaterThanOrEqual(minAmountOut);
     // The pool base is consumed inside the hop: it must never land on the recipient.
-    expect(await balanceOf(USDCB, me)).toBe(usdcbBefore);
-    console.log(`    filled ${fmt(got)} TSLA for ${fmt(amountIn)} NVDA`);
+    expect(await balanceOf(base.address, me)).toBe(baseBefore);
+    console.log(`    filled ${fmt(got, b.decimals)} ${b.symbol} for ${fmt(amountIn, a.decimals)} ${a.symbol}`);
   }, 120_000);
 });
+

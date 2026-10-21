@@ -6,10 +6,12 @@ TypeScript through a plain JSON-RPC client with no BTR dependency at all.
 
 Every example is executed against a real deployment by the test suite. Nothing here is a sketch.
 
-Four asset classes are exercised, not one: stables, FX (EURC, JPYC), tokenised equities (NVDA,
-ASML, TSLA) and crypto (WETH). They are here because they break different assumptions - EURC is a
-6-decimal token, JPYC is worth a fraction of a cent, an NVDA share is worth hundreds of dollars,
-and an equity feed is stale for most of the week on purpose.
+Four asset classes are in scope, not one: stables, FX, volatile (crypto and metals) and tokenised
+equities. They are here because they break different assumptions: an FX token can have fewer
+decimals than the base, can be worth a fraction of a cent, a share is worth hundreds of dollars,
+and an equity feed is stale for most of the week on purpose. Which classes a run exercises is
+whatever the chain's pools hold; a test for a class the chain does not have SKIPS, with the
+reason in its name. See [Chains](#chains).
 
 | # | Operation | Solidity (Foundry) | TypeScript, SDK | TypeScript, vanilla RPC | Guide |
 |---|---|---|---|---|---|
@@ -23,7 +25,8 @@ and an equity feed is stale for most of the week on purpose.
 ## Layout
 
 ```
-config/<chainId>.json   every address, feed id and calendar, in one place. Nothing is inlined.
+config/<chainId>.json   chain, endpoints, contracts, pools, tokens, feeds. Written by gen-config, never by hand.
+scripts/gen-config.ts   writes config/<chainId>.json from the dex-evm deployment records.
 foundry/                Solidity: minimal interfaces, one consumer contract, six fork suites.
 typescript/sdk/         off chain, using @btr-protocol/sdk.
 typescript/rpc/         off chain, using viem only. No BTR dependency.
@@ -31,8 +34,29 @@ typescript/test/read/   read-only tests, run against the live chain.
 typescript/test/fork/   state-changing tests, run against a local anvil fork.
 ```
 
-There is no hardcoded address, pool or chain id in any example file. Point everything at another
-BTR deployment by adding `config/<chainId>.json` and setting `BTR_CHAIN_ID`.
+No deployment address, pool name, token symbol or chain id is hardcoded in an example file; the
+suites iterate the pools and legs the config declares. The only address literals are the
+`0x...dEaD` placeholder recipient of a dry run and anvil's public development key in the fork
+harness. There is no default chain: `BTR_CHAIN_ID` is required.
+
+## Chains
+
+| Chain | `BTR_CHAIN_ID` | Pools | What runs |
+|---|---|---|---|
+| Arc testnet | `5042002` | `stableCore`, `cryptoCore` | stable, volatile and one FX leg; swaps, router, deposit, withdraw and debt swap on the fork. No equity pool is deployed, so the equity tests skip |
+| Monad | `143` | `core` | quotes, feeds and the router wiring read live. Swaps and deposits are gated to an allowlist, so the state-changing tests skip; the second pool the multi-pool route needs does not exist either |
+
+The config is generated from the [dex-evm](https://github.com/btr-protocol/dex-evm) deployment
+records (`<chainId>.deploy.json`, `<chainId>.pools.json`, `<slug>.manifest.json`, `chains.json`).
+To add a chain, or to refresh one after a redeploy:
+
+```bash
+bun scripts/gen-config.ts <chainId> path/to/dex-evm/deployments
+# or: BTR_DEPLOYMENTS=path/to/dex-evm/deployments bun scripts/gen-config.ts <chainId>
+```
+
+`scripts/calendars.json` lists the tickers that follow the US cash session, the one fact no record
+carries: it decides whether a stale feed is a closed market or an outage.
 
 ## Prerequisites
 
@@ -47,10 +71,15 @@ cd examples/typescript && bun install
 ## Run everything
 
 ```bash
-# Solidity: 58 tests, forked against the live chain, executing real swaps and LP flows.
-# Point BTR_RPC_URL at your own endpoint: the suite forks from the config's `rpcUrl`, so
-# `forge test --fork-url ...` does NOT change where it reads from.
-cd foundry && forge test -vv
+export BTR_CHAIN_ID=5042002   # required: a file name in config/
+
+# Solidity: 58 tests, forked against the live chain, executing real swaps and LP flows. A test
+# the chain cannot run (no FX pool, a gated leg) skips and says why.
+# BTR_RPC_URL picks the endpoint the suite forks (default: the first of the config's `rpcUrls`
+# that answers); `forge test --fork-url ...` does NOT change where it reads from. forge's pacing
+# flags need --rpc-url, so give both the same endpoint.
+cd foundry && BTR_RPC_URL=<endpoint> forge test -vv --rpc-url <endpoint> \
+  --compute-units-per-second 100 --fork-retries 10
 
 # TypeScript, read-only, against the live chain. No key, no state change.
 cd typescript && bun test test/read
@@ -83,8 +112,8 @@ See [`.env.example`](.env.example).
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `BTR_CHAIN_ID` | `5042002` | Which `config/<chainId>.json` to load |
-| `BTR_RPC_URL` | the config's `rpcUrl` | Endpoint to use, or to fork |
+| `BTR_CHAIN_ID` | none, required | Which `config/<chainId>.json` to load |
+| `BTR_RPC_URL` | first of the config's `rpcUrls` that answers | Endpoint to use, or to fork |
 | `BTR_PRIVATE_KEY` | unset | Set to SEND transactions. Unset means dry run |
 | `BTR_FORK_BLOCK` | `0` (latest) | Foundry only: pin the fork for reproducible numbers |
 | `ANVIL_PORT` | `8545` | TypeScript fork suite: port for the anvil it boots |
@@ -107,9 +136,9 @@ and Foundry caches fork reads on disk.
 Both are complete. They are twins on purpose, so you can diff them.
 
 **`@btr-protocol/sdk`** ships the deployed ABIs, typed structs, and the protocol's own semantics:
-`observedAtSecs` is the freshness clock the contracts actually gate on, `SwapQuote` comes back with
+`observedAtSecs` is the clock a feed is aged on, `SwapQuote` comes back with
 `markPrice` and `midPrice` named rather than positional, and `quoteSwapLiability` is an off-chain
-replica of the haircut maths. Pick it when you are in TypeScript and want the protocol's reading of
+replica of the settlement maths. Pick it when you are in TypeScript and want the protocol's reading of
 its own data rather than yours.
 
 **Vanilla JSON-RPC** (viem here) proves BTR needs no SDK. Every call is an `eth_call` against a
@@ -130,22 +159,24 @@ tuple and the nested `Part[]`/`Hop[]` encoding are yours to get right.
 3. **The pool pulls with `transferFrom(msg.sender)`.** So an approval is mandatory, and Multicall3
    cannot swap: under Multicall3 the `msg.sender` the pool sees is the multicall contract.
 4. **A withdraw floor comes from `previewWithdraw`, not from what you deposited.** The two differ
-   by the coverage haircut. Freshly minted shares are also frozen for `flowCooldownSecs`, which is
+   by the coverage haircut and the exit toll. Freshly minted shares are also frozen for `flowCooldownSecs`, which is
    why `maxRedeem` is zero right after a deposit.
 5. **A debt swap is denominated in LP SHARES on both sides**, and shares are not comparable across
    legs: each leg carries its own liquidity index. Compare VALUE through `previewWithdraw`. The
    same `flowCooldownSecs` freeze applies, because `swapLiability` moves an LP claim just as a
    withdraw does: deposit and re-denominate in one block and the call reverts `CooldownActive()`.
-   And the carry is not par between two stables. What arrives is marked to the DESTINATION leg's
-   coverage, so joining an under-covered leg costs you its shortfall.
-6. **Decimals are not 18.** EURC is 6. `SwapQuote.markPrice` is a WHOLE-UNIT price, so a raw
-   `amountOut / amountIn` ratio only matches it when both legs share a decimal count. On the
-   USDCB/EURC leg the raw ratio is out by 1e12, and nothing reverts: it reads as a 99.9999% price
-   impact, or as a clean zero if you floor it, and a zero passes an equality check against another
-   zero. Every amount in these examples is built from the token's own `decimals()`.
+   And the carry is not par between two stables. The swap settles at the pool-wide solvency C and
+   the face crosses, but a share of a leg is worth `face * min(coverage(leg), C)` on exit, so the
+   value moves by the ratio of the two legs' coverage.
+6. **Decimals are not 18.** USDC and XAUT0 are 6, EURC is 6 against Arc's 18-decimal base.
+   `SwapQuote.markPrice` is a WHOLE-UNIT price, so a raw `amountOut / amountIn` ratio only matches
+   it when both legs share a decimal count. Across 18 and 6 the raw ratio is out by 1e12, and
+   nothing reverts: it reads as a 99.9999% price impact, or as a clean zero if you floor it, and a
+   zero passes an equality check against another zero. Every amount in these examples is built
+   from the token's own `decimals()`.
 7. **Stale is normal for an equity, and only for an equity.** The US cash session is about 30% of
-   the week and the keeper deliberately does not heartbeat a frozen record. A stale NVDA feed at
-   03:00 UTC on a Sunday is the system working; a stale WETH, EURC or JPYC feed never is. The
+   the week and the keeper deliberately does not heartbeat a frozen record. A stale equity feed at
+   03:00 UTC on a Sunday is the system working; a stale crypto, FX or stable feed never is. The
    oracle examples return `live` / `closed` / `incident` rather than a boolean, and the tests that
    need an open market SKIP loudly with the reason instead of failing every weekend.
 

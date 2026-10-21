@@ -7,9 +7,10 @@
  *
  * TWO THINGS MAKE A WITHDRAW DIFFERENT FROM A DEPOSIT.
  *
- *   1. THERE IS A HAIRCUT. Below 100% coverage a leg pays less than the shares' face value, and
- *      it must: the alternative is first-out-gets-paid-in-full, which is a bank run with extra
- *      steps. `previewWithdraw` returns BOTH the amount and the haircut. Read both.
+ *   1. THERE IS A HAIRCUT. A same-asset exit pays `face * min(coverage(leg), C)` less a small
+ *      exit toll, so a leg short of reserves pays less than the shares' face value, and it must:
+ *      the alternative is first-out-gets-paid-in-full, which is a bank run with extra steps.
+ *      `previewWithdraw` returns BOTH the amount and the haircut. Read both.
  *   2. THERE IS AN ANTI-JIT COOLDOWN. Shares minted within the last `flowCooldownSecs` cannot be
  *      redeemed, which is what stops a deposit-donate-withdraw sandwich harvesting the index move.
  *      `maxRedeem` is the capacity check: it folds in the freeze and the liquid reserves.
@@ -22,7 +23,7 @@
  */
 import { POOL_ABI } from '@btr-protocol/sdk/abis';
 import { readContract } from '@btr-protocol/sdk/eth';
-import { deadline, floorFrom, fmt, pool, token, withRetry, type Address } from '../src/config.ts';
+import { deadline, demoLeg, floorFrom, fmt, need, withRetry, type Address } from '../src/config.ts';
 import { account, armed, call, provider, send } from '../src/sdk-wallet.ts';
 import { lpBalance } from './04-deposit.ts';
 
@@ -52,8 +53,9 @@ export async function withdrawCall(p: Address, tk: Address, lp: bigint, slippage
 }
 
 if (import.meta.main) {
-  const p = pool('stablePool');
-  const tk = token('USDT');
+  const leg = need(demoLeg(), 'pool with a non-base leg');
+  const p = leg.pool;
+  const tk = leg.token;
   const user = (account ?? '0x000000000000000000000000000000000000dEaD') as Address;
 
   const shares = await lpBalance(p, user, tk);
@@ -69,9 +71,9 @@ if (import.meta.main) {
   const lp = redeemable < shares ? redeemable : shares;
 
   const w = await withdrawCall(p, tk, lp, 10);
-  console.log(`preview     ${fmt(w.amountOut)} USDT`);
-  console.log(`haircut     ${fmt(w.haircut)}`);
-  console.log(`floor       ${fmt(w.minAmountOut)} USDT   (10 bps tolerance, off the PREVIEW)`);
+  console.log(`preview     ${fmt(w.amountOut, leg.decimals)} ${leg.symbol}`);
+  console.log(`haircut     ${fmt(w.haircut, leg.decimals)}`);
+  console.log(`floor       ${fmt(w.minAmountOut, leg.decimals)} ${leg.symbol}   (10 bps tolerance, off the PREVIEW)`);
 
   await send([w.call]);
   if (armed) console.log(`lp after    ${fmt(await lpBalance(p, user, tk))}`);
