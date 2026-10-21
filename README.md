@@ -68,6 +68,8 @@ git clone --recurse-submodules https://github.com/btr-protocol/examples
 cd examples/typescript && bun install
 ```
 
+`bun install` runs the sdk `postinstall`, which generates the Pool and Admin ABIs from the pinned snapshot and fetches them from `api.btr.markets/v1/abis` when the snapshot misses; each ABI is content-pinned. Offline, set `BTR_ABI_ALLOW_STALE=1` to use the vendored fallback.
+
 ## Run everything
 
 ```bash
