@@ -24,7 +24,7 @@ const EQUITIES = ['NVDA', 'ASML', 'TSLA'] as const;
 describe('oracle, SDK surface', () => {
   test('every configured feed is live, unpaused and sane', async () => {
     for (const s of SYMBOLS) {
-      const f = await sdk.getFeed(config.contracts.oracle, feedId(s));
+      const f = await sdk.getFeed(config.contracts.poolFactory, feedId(s));
       expect(f.mark1e18).toBeGreaterThan(0n); // zero is the STALE sentinel, not a price
       expect(Number(f.flags) & 1).toBe(0); // not paused
       expect(Number(f.ttlSecs)).toBeGreaterThan(0);
@@ -55,14 +55,14 @@ describe('oracle, SDK surface', () => {
   });
 
   test('a stale feed is rejected', async () => {
-    const f = await sdk.getFeed(config.contracts.oracle, feedId('WETH'));
+    const f = await sdk.getFeed(config.contracts.poolFactory, feedId('WETH'));
     const wayLater = Date.now() / 1000 + 86_400;
     expect(() => sdk.gate(f, feedId('WETH'), sdk.DEFAULT_GATE, wayLater)).toThrow(sdk.FeedRejected);
   }, 30_000);
 
   test('an unconfigured feed id REVERTS, it does not return zero', async () => {
     const unknown = `0x${'ab'.repeat(32)}` as const;
-    await expect(sdk.getFeed(config.contracts.oracle, unknown)).rejects.toThrow();
+    await expect(sdk.getFeed(config.contracts.poolFactory, unknown)).rejects.toThrow();
   }, 30_000);
 });
 
@@ -70,10 +70,10 @@ describe('oracle, asset classes', () => {
   // The class difference that actually bites: FX carries a 3600s ttl, equities and crypto 600s.
   // An integrator who hardcodes one bound rejects healthy FX or accepts stale equity.
   test('FX ttl is longer than the equity and crypto ttl', async () => {
-    const eurc = await sdk.getFeed(config.contracts.oracle, feedId('EURC'));
-    const jpyc = await sdk.getFeed(config.contracts.oracle, feedId('JPYC'));
-    const nvda = await sdk.getFeed(config.contracts.oracle, feedId('NVDA'));
-    const weth = await sdk.getFeed(config.contracts.oracle, feedId('WETH'));
+    const eurc = await sdk.getFeed(config.contracts.poolFactory, feedId('EURC'));
+    const jpyc = await sdk.getFeed(config.contracts.poolFactory, feedId('JPYC'));
+    const nvda = await sdk.getFeed(config.contracts.poolFactory, feedId('NVDA'));
+    const weth = await sdk.getFeed(config.contracts.poolFactory, feedId('WETH'));
     expect(Number(eurc.ttlSecs)).toBe(Number(jpyc.ttlSecs));
     expect(Number(nvda.ttlSecs)).toBe(Number(weth.ttlSecs));
     expect(Number(eurc.ttlSecs)).toBeGreaterThan(Number(nvda.ttlSecs));
@@ -82,7 +82,7 @@ describe('oracle, asset classes', () => {
   // JPYC is ~0.0063 USD and ASML is ~1658 USD: six orders of magnitude in the SAME uint256.
   // Anything that rounds a mark to whole units reads JPYC as zero and calls it a pass.
   test('a sub-unit FX mark survives the read without rounding to zero', async () => {
-    const f = await sdk.getFeed(config.contracts.oracle, feedId('JPYC'));
+    const f = await sdk.getFeed(config.contracts.poolFactory, feedId('JPYC'));
     expect(f.mark1e18).toBeGreaterThan(0n);
     expect(f.mark1e18).toBeLessThan(10n ** 18n); // below 1.0: the whole point
     expect(f.mark1e18 / 10n ** 18n).toBe(0n); // and this is what truncating it would give you
@@ -123,7 +123,7 @@ describe('oracle, asset classes', () => {
   // different monitor wearing the same name.
   test('the SDK and vanilla classifiers agree', async () => {
     for (const s of [...FX, ...EQUITIES]) {
-      const raw = await rpc.getFeed(config.contracts.oracle, feedId(s));
+      const raw = await rpc.getFeed(config.contracts.poolFactory, feedId(s));
       const viaRpc = rpc.classify(s, raw);
       const viaSdk = await sdk.classify(s);
       expect(viaRpc.verdict).toBe(viaSdk.verdict);
@@ -134,7 +134,7 @@ describe('oracle, asset classes', () => {
   // The oracle's feed set is a SUPERSET of what the pools trade. ASML has a mark and no token, so
   // "I can read a price" is not evidence that a pair is swappable.
   test('a feed can exist with no listed token', async () => {
-    const f = await sdk.getFeed(config.contracts.oracle, feedId('ASML'));
+    const f = await sdk.getFeed(config.contracts.poolFactory, feedId('ASML'));
     expect(f.mark1e18).toBeGreaterThan(0n);
     expect(config.tokens.ASML).toBeUndefined();
   }, 30_000);
@@ -143,8 +143,8 @@ describe('oracle, asset classes', () => {
 describe('oracle, vanilla JSON-RPC surface', () => {
   test('reads the same marks as the SDK path', async () => {
     for (const s of SYMBOLS) {
-      const viaRpc = await rpc.getFeed(config.contracts.oracle, feedId(s));
-      const viaSdk = await sdk.getFeed(config.contracts.oracle, feedId(s));
+      const viaRpc = await rpc.getFeed(config.contracts.poolFactory, feedId(s));
+      const viaSdk = await sdk.getFeed(config.contracts.poolFactory, feedId(s));
       // Different blocks are possible between the two reads, so compare the SHAPE, not the value.
       expect(viaRpc.mark1e18).toBeGreaterThan(0n);
       expect(Number(viaRpc.ttlSecs)).toBe(Number(viaSdk.ttlSecs));
@@ -153,14 +153,14 @@ describe('oracle, vanilla JSON-RPC surface', () => {
   }, 60_000);
 
   test('observedAtSecs matches the SDK implementation of the same rule', async () => {
-    const f = await rpc.getFeed(config.contracts.oracle, feedId('WETH'));
+    const f = await rpc.getFeed(config.contracts.poolFactory, feedId('WETH'));
     const mine = rpc.observedAtSecs(f);
     const theirs = Math.min(Math.floor(Number(f.sourceTsMs) / 1000) || f.updatedAtSecs, f.updatedAtSecs);
     expect(mine).toBe(theirs);
   }, 30_000);
 
   test('conservative value never exceeds the raw value', async () => {
-    const f = await sdk.getFeed(config.contracts.oracle, feedId('WETH'));
+    const f = await sdk.getFeed(config.contracts.poolFactory, feedId('WETH'));
     const amount = 10n ** 18n;
     const raw = (amount * f.mark1e18) / 10n ** 18n;
     const safe = sdk.conservativeValue1e18(f.mark1e18, Number(f.confidenceBps), amount, 2);

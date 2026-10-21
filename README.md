@@ -122,9 +122,11 @@ tuple and the nested `Part[]`/`Hop[]` encoding are yours to get right.
 
 1. **Zero is not a price.** `mark1e18 == 0` is the STALE sentinel a feed carries before its first
    accepted push. An unconfigured feed id does not return zero, it reverts `FeedNotFound`.
-2. **Freshness is not `updatedAtSecs`.** The contracts gate on `min(sourceTs, updatedAt)`. Age off
-   `updatedAtSecs` alone understates it by the relay lag, which is how a feed reads fresh off chain
-   and reverts on chain.
+2. **Freshness is age against `ttlSecs`.** The pools revert `StaleData` once `now - updatedAtSecs`
+   exceeds the feed's own `ttlSecs`. The oracle is the PoolFactory: `feedOf(feedId, 1)` is the
+   primary tier, `feedOf(feedId, 2)` the reference tier, and both carry their own `ttlSecs`. Apply
+   the same bound yourself, tighter if your risk appetite is, or you price off a mark the pools
+   would refuse.
 3. **The pool pulls with `transferFrom(msg.sender)`.** So an approval is mandatory, and Multicall3
    cannot swap: under Multicall3 the `msg.sender` the pool sees is the multicall contract.
 4. **A withdraw floor comes from `previewWithdraw`, not from what you deposited.** The two differ

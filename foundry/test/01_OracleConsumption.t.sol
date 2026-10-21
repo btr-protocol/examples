@@ -26,7 +26,7 @@ contract OracleConsumptionTest is BTRForkTest {
     // outer limit rather than your risk appetite. It is deliberately not tightened here: pushes
     // are edge triggered, so a 120s bound makes this test fail on a quiet market rather than on
     // a bug, and a test that red-flags a healthy chain teaches you to ignore it.
-    consumer = new OracleConsumer(address(oracle), address(refOracle), 600, 100, 100);
+    consumer = new OracleConsumer(address(oracle), 600, 100, 100);
   }
 
   /// The raw surface, so you can see what actually comes back before anything is done with it.
@@ -54,12 +54,12 @@ contract OracleConsumptionTest is BTRForkTest {
     emit log_named_decimal_uint("gated WETH mark", mark, 18);
   }
 
-  /// Both tiers, required to agree. The reference tier is an independent second push.
+  /// Both tiers, required to agree. Tier 2 of `feedOf` is an independent second push.
   function test_twoTierAgreement() public {
     bytes32 id = feedId("WETH");
     uint256 agreed = consumer.readAgreedMark(id);
     uint256 p = oracle.getFeed(id).mark1e18;
-    uint256 r = refOracle.getFeed(id).mark1e18;
+    uint256 r = oracle.feedOf(id, 2).mark1e18;
     assertEq(agreed, p, "readAgreedMark returns the primary, never an average");
     emit log_named_decimal_uint("primary  ", p, 18);
     emit log_named_decimal_uint("reference", r, 18);
@@ -76,14 +76,14 @@ contract OracleConsumptionTest is BTRForkTest {
     consumer.readMark(id);
   }
 
-  /// `flags & 1` is a guardian pause. Faked here with a storage-free override so the assertion
+  /// `flags & 1` is a halt. Faked here with a storage-free override so the assertion
   /// does not depend on a feed happening to be paused on the live chain.
   function test_pausedFeedReverts() public {
     bytes32 id = feedId("WETH");
     IOracle.FeedData memory f = oracle.getFeed(id);
     f.flags = f.flags | 1;
     vm.mockCall(
-      address(oracle), abi.encodeWithSelector(IOracle.getFeed.selector, id), abi.encode(f)
+      address(oracle), abi.encodeWithSelector(IOracle.feedOf.selector, id, 1), abi.encode(f)
     );
     vm.expectRevert(abi.encodeWithSelector(OracleConsumer.PausedFeed.selector, id));
     consumer.readMark(id);
@@ -106,7 +106,7 @@ contract OracleConsumptionTest is BTRForkTest {
     IOracle.FeedData memory f = oracle.getFeed(id);
     f.mark1e18 = 0; // the sentinel a registered-but-unpushed feed carries
     vm.mockCall(
-      address(oracle), abi.encodeWithSelector(IOracle.getFeed.selector, id), abi.encode(f)
+      address(oracle), abi.encodeWithSelector(IOracle.feedOf.selector, id, 1), abi.encode(f)
     );
     vm.expectRevert(abi.encodeWithSelector(OracleConsumer.NoMark.selector, id));
     consumer.readMark(id);
@@ -131,7 +131,7 @@ contract OracleConsumptionTest is BTRForkTest {
       IOracle.FeedData memory f = oracle.getFeed(feedId(syms[i]));
       assertGt(f.mark1e18, 0, syms[i]);
       assertEq(f.flags & 1, 0, syms[i]);
-      assertTrue(oracle.isFeedFresh(feedId(syms[i])), syms[i]);
+      assertLe(block.timestamp - consumer.observedAt(f), f.ttlSecs, syms[i]);
     }
   }
 
@@ -180,7 +180,7 @@ contract OracleConsumptionTest is BTRForkTest {
       assertGt(f.mark1e18, 0, syms[i]);
       assertEq(f.flags & 1, 0, syms[i]);
 
-      if (oracle.isFeedFresh(feedId(syms[i]))) {
+      if (block.timestamp - consumer.observedAt(f) <= f.ttlSecs) {
         assertLe(consumer.observedAt(f), block.timestamp, syms[i]);
         continue;
       }

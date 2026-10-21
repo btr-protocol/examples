@@ -25,10 +25,9 @@ export interface BtrConfig {
   explorer: string;
   nativeSymbol: string;
   contracts: {
-    oracle: Address;
-    refOracle: Address;
-    router: Address;
+    /** Serves the oracle too: `feedOf(feedId, 1)` primary tier, `feedOf(feedId, 2)` reference. */
     poolFactory: Address;
+    router: Address;
     faucet: Address;
   };
   pools: Record<string, Address>;

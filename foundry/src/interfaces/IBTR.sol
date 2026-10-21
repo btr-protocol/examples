@@ -4,9 +4,10 @@ pragma solidity ^0.8.24;
 /**
  * @title Minimal BTR integration interfaces
  * @notice Everything an external contract needs to talk to a BTR deployment: the oracle read
- *         surface, the pool entry points, and the router. Declared here rather than imported so
- *         these examples compile from a bare clone with no BTR source in the tree, which is also
- *         how your own integration should do it: copy the four declarations you actually call.
+ *         surface (served by the PoolFactory), the pool entry points, and the router. Declared
+ *         here rather than imported so these examples compile from a bare clone with no BTR
+ *         source in the tree, which is also how your own integration should do it: copy the four
+ *         declarations you actually call.
  *
  * Docs:
  *   Oracle  https://btr.markets/docs/5-1-5-consuming-price-feeds
@@ -25,34 +26,36 @@ interface IERC20 {
 }
 
 interface IOracle {
-  /// @notice One feed as the oracle stores it. Field names matter: an ABI decoder keys the tuple
-  ///         by name, so a renamed field silently reads zero rather than throwing.
+  /// @notice One feed tier as the PoolFactory serves it. Field names matter: an ABI decoder keys
+  ///         the tuple by name, so a renamed field silently reads zero rather than throwing.
   struct FeedData {
-    /// @dev Fresh mark, 1e18 WAD. ZERO IS THE STALE SENTINEL, never a price.
+    /// @dev Live mark, 1e18 WAD. ZERO IS THE STALE SENTINEL, never a price: the lane is dark or halted.
     uint256 mark1e18;
-    /// @dev Signed volatility estimate, PBPS (1e6 = 100%).
+    /// @dev Served volatility, PBPS (1e6 = 100%).
     uint32 sigmaPbps;
-    /// @dev Chain clock of the last accepted push, seconds.
+    /// @dev Source second of the last accepted mark.
     uint32 updatedAtSecs;
-    /// @dev Staleness bound, seconds.
+    /// @dev Staleness bound, seconds. The pools revert once the mark is older than this.
     uint16 ttlSecs;
     /// @dev One-sigma confidence interval around the mark, bps.
     uint16 confidenceBps;
-    /// @dev Feed bits. Bit 0 = paused.
+    /// @dev Feed bits. Bit 0 = halted.
     uint16 flags;
     /// @dev Single-push deviation bound, bps.
     uint16 maxDevBps;
-    /// @dev Signer-attested source time, milliseconds. 0 when the feed is unsigned.
+    /// @dev `updatedAtSecs` in milliseconds.
     uint48 sourceTsMs;
   }
 
-  /// @dev An id the oracle has never been configured with REVERTS with this. It does not return
-  ///      a zero struct, so `getFeed` on an unknown id is not a soft miss you can branch on.
+  /// @dev An id the factory has no lane for REVERTS with this. It does not return a zero struct,
+  ///      so a read on an unknown id is not a soft miss you can branch on.
   error FeedNotFound(bytes32 feedId);
 
+  /// @notice The primary tier. Same as `feedOf(feedId, 1)`.
   function getFeed(bytes32 feedId) external view returns (FeedData memory);
-  function isFeedFresh(bytes32 feedId) external view returns (bool);
-  function isFeedFresh(bytes32 feedId, uint32 maxAge) external view returns (bool);
+
+  /// @notice One tier of a feed: 1 = primary, 2 = reference. Any other `t` reverts `FeedNotFound`.
+  function feedOf(bytes32 feedId, uint256 t) external view returns (FeedData memory);
 }
 
 interface IPool {

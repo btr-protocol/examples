@@ -20,8 +20,8 @@ import {IERC20, IOracle, IPool, IRouter} from "../src/interfaces/IBTR.sol";
  * check different things, and neither substitutes for the other.
  */
 abstract contract BTRForkTest is Test {
+  /// @dev The PoolFactory: it serves both feed tiers (`feedOf(feedId, 1|2)`).
   IOracle internal oracle;
-  IOracle internal refOracle;
   IRouter internal router;
 
   IPool internal stablePool;
@@ -54,8 +54,7 @@ abstract contract BTRForkTest is Test {
 
     require(block.chainid == chainId, "forked the wrong chain");
 
-    oracle = IOracle(addr(".contracts.oracle"));
-    refOracle = IOracle(addr(".contracts.refOracle"));
+    oracle = IOracle(addr(".contracts.poolFactory"));
     router = IRouter(addr(".contracts.router"));
 
     stablePool = IPool(addr(".pools.stablePool"));

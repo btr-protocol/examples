@@ -6,12 +6,12 @@
  * On chain: ../../foundry/src/OracleConsumer.sol
  *
  * WHY THIS ONE. Nothing here imports the BTR SDK. The oracle is one `eth_call` against a
- * four-line ABI, so a Python, Rust or Go consumer is the same shape. Pick it when you do not want
+ * two-line ABI, so a Python, Rust or Go consumer is the same shape. Pick it when you do not want
  * a dependency, or when your stack is not TypeScript and this is your reference.
  *
- * WHAT YOU GIVE UP: the freshness rule below is transcribed by hand. `observedAt` must be
- * `min(sourceTs, updatedAt)`; getting that wrong is not a crash, it is a feed that reads fresh
- * off chain and reverts on chain.
+ * WHAT YOU GIVE UP: the freshness rule below is transcribed by hand. A feed is fresh while its
+ * age on `min(sourceTs, updatedAt)` is within its own `ttlSecs`; get that wrong and it is not a
+ * crash, it is a feed that reads fresh off chain and reverts `StaleData` on chain.
  *
  * Run: bun run rpc/01-oracle.ts
  */
@@ -32,9 +32,12 @@ export interface Feed {
   sourceTsMs: number | bigint;
 }
 
-export const getFeed = (oracle: Hex, id: Hex) =>
+/** One tier from the PoolFactory: 1 = primary, 2 = reference. */
+export const getFeed = (oracle: Hex, id: Hex, tier: 1 | 2 = 1) =>
   withRetry(() =>
-    publicClient.readContract({ address: oracle, abi: ORACLE_ABI, functionName: 'getFeed', args: [id] }),
+    publicClient.readContract({
+      address: oracle, abi: ORACLE_ABI, functionName: 'feedOf', args: [id, BigInt(tier)],
+    }),
   ) as Promise<Feed>;
 
 /** The clock the CONTRACTS gate on. Transcribe it exactly: `min(sourceTs, updatedAt)`, falling
@@ -50,13 +53,13 @@ export class FeedRejected extends Error {}
 
 /**
  * The same four checks as the SDK version and the Solidity one, in the same order:
- *   1. `flags & 1` is a guardian pause. Stop.
+ *   1. `flags & 1` is a guardian halt. Stop.
  *   2. `mark1e18 === 0` is the STALE SENTINEL, never a price.
  *   3. age on the observed clock, against YOUR bound and the feed's own `ttlSecs`.
  *   4. `confidenceBps` is the one-sigma interval; `sigmaPbps` (1e6 = 100%) is the volatility.
  */
 export function gate(f: Feed, id: Hex, maxAgeSecs = 600, maxConfidenceBps = 100, nowSecs = Date.now() / 1000) {
-  if (f.flags & 1) throw new FeedRejected(`feed ${id} is paused`);
+  if (f.flags & 1) throw new FeedRejected(`feed ${id} is halted`);
   if (f.mark1e18 === 0n) throw new FeedRejected(`feed ${id} has no mark yet (zero sentinel)`);
   const age = Math.floor(nowSecs) - observedAtSecs(f);
   if (age > maxAgeSecs || age > f.ttlSecs) throw new FeedRejected(`feed ${id} is ${age}s old`);
@@ -64,11 +67,11 @@ export function gate(f: Feed, id: Hex, maxAgeSecs = 600, maxConfidenceBps = 100,
   return { mark1e18: f.mark1e18, ageSecs: age, sigmaPbps: f.sigmaPbps };
 }
 
-/** Read both tiers and require agreement. Returns the PRIMARY mark, never an average. */
+/** Read both tiers (`feedOf(id, 1)` and `feedOf(id, 2)`) and require agreement. Returns the PRIMARY mark, never an average. */
 export async function readAgreedMark(id: Hex, maxDivergenceBps = 100) {
   const [p, r] = await Promise.all([
-    getFeed(config.contracts.oracle, id),
-    getFeed(config.contracts.refOracle, id),
+    getFeed(config.contracts.poolFactory, id, 1),
+    getFeed(config.contracts.poolFactory, id, 2),
   ]);
   const a = gate(p, id);
   const b = gate(r, id);
@@ -104,7 +107,7 @@ if (import.meta.main) {
   // the same age in seconds.
   for (const s of ['EURC', 'JPYC', 'NVDA', 'ASML', 'TSLA', 'WETH']) {
     const id = feedId(s);
-    const raw = await getFeed(config.contracts.oracle, id);
+    const raw = await getFeed(config.contracts.poolFactory, id);
     const st = classify(s, raw);
     const head =
       `${s.padEnd(6)} ${st.verdict.padEnd(8)} ttl=${String(st.ttlSecs).padStart(4)}s` +
@@ -123,7 +126,7 @@ if (import.meta.main) {
   // An id the oracle has never been configured with REVERTS `FeedNotFound`. It does NOT return a
   // zero struct, so this is not a soft miss you can branch on.
   try {
-    await getFeed(config.contracts.oracle, `0x${'11'.repeat(32)}` as Hex);
+    await getFeed(config.contracts.poolFactory, `0x${'11'.repeat(32)}` as Hex);
     console.log('\nunknown feed: returned a value (unexpected)');
   } catch (e) {
     console.log(`\nunknown feed: reverted as expected (${(e as Error).name})`);

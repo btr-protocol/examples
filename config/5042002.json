@@ -5,8 +5,6 @@
   "explorer": "https://testnet.arcscan.app",
   "nativeSymbol": "USDC",
   "contracts": {
-    "oracle": "0x842c2736F072A8A7b523D23bd3Ef21F21AC24d5C",
-    "refOracle": "0xC17920b2cC4Ac028c7F8bdB46E952Fb2d2a172a6",
     "router": "0xb96d5049045B68548454474d68e597f48414eCc4",
     "poolFactory": "0xaF5Dfa6F3f549bAb1598Ff24d15c0cF9aCaA6Df7",
     "faucet": "0x97BE19E537B9064f5c4984dD1e83Ad8b6aBe0cC3"

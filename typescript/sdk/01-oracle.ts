@@ -5,15 +5,14 @@
  * Twin:    ../rpc/01-oracle.ts        (same job, viem only, no SDK)
  * On chain: ../../foundry/src/OracleConsumer.sol
  *
- * WHY THIS ONE. The SDK ships the deployed ABIs, a typed `FeedData`, and `observedAtSecs`,
- * which is the freshness clock the contracts actually gate on. You get the right answer without
- * having to know that `updatedAtSecs` alone understates age by the relay lag. Pick this when you
- * are already in TypeScript and want the protocol's own semantics rather than your reading of them.
+ * WHY THIS ONE. The SDK ships the deployed ABIs (`POOL_FACTORY_ABI` serves the oracle), a typed
+ * `FeedData`, and `observedAtSecs`, the clock a feed is aged on. Pick this when you are already in
+ * TypeScript and want the protocol's own semantics rather than your reading of them.
  *
  * Run: bun run sdk/01-oracle.ts
  */
 import { createHttpProvider, readContract } from '@btr-protocol/sdk/eth';
-import { EXTERNAL_ORACLE_V4_ABI } from '@btr-protocol/sdk/abis';
+import { POOL_FACTORY_ABI } from '@btr-protocol/sdk/abis';
 import { observedAtSecs, type FeedData } from '@btr-protocol/sdk/oracle';
 import {
   config, feedId, fmt, followsUsEquityCalendar, rpcUrl, usMarketOpen, withRetry,
@@ -37,10 +36,13 @@ export class FeedRejected extends Error {}
 
 const provider = createHttpProvider(rpcUrl);
 
-/** Raw read. Note the bigint fields: the SDK does not narrow them, and neither should you. */
-export async function getFeed(oracle: Address, id: Hex): Promise<FeedData> {
+/**
+ * Raw read of one tier from the PoolFactory: 1 = primary, 2 = reference. Note the bigint fields:
+ * the SDK does not narrow them, and neither should you.
+ */
+export async function getFeed(oracle: Address, id: Hex, tier: 1 | 2 = 1): Promise<FeedData> {
   return withRetry(() =>
-    readContract<FeedData>(provider, oracle, EXTERNAL_ORACLE_V4_ABI, 'getFeed', [id]),
+    readContract<FeedData>(provider, oracle, POOL_FACTORY_ABI, 'feedOf', [id, BigInt(tier)]),
   );
 }
 
@@ -49,9 +51,10 @@ export async function getFeed(oracle: Address, id: Hex): Promise<FeedData> {
  *
  *  1. `mark1e18 === 0` is the STALE SENTINEL, not a price. It is what a registered feed carries
  *     before its first accepted push. Divide by it and you brick.
- *  2. Age is measured on `min(sourceTs, updatedAt)`, which is what `observedAtSecs` returns.
- *     Measuring off `updatedAtSecs` alone reads fresh off chain and reverts on chain.
- *  3. `flags & 1` is a guardian pause. It means a human decided not to trust this number.
+ *  2. Age is measured on `min(sourceTs, updatedAt)`, which is what `observedAtSecs` returns (the
+ *     PoolFactory sets `sourceTsMs` to `updatedAtSecs` in ms, so the two are equal), and it must
+ *     stay within the feed's own `ttlSecs`: the pools revert `StaleData` past it.
+ *  3. `flags & 1` is a guardian halt. It means a human decided not to trust this number.
  *  4. `confidenceBps` is the mark's one-sigma interval. A mark is a distribution, not a number,
  *     and `sigmaPbps` (1e6 = 100%) is the volatility you should be sizing against.
  */
@@ -73,15 +76,15 @@ export function gate(f: FeedData, id: Hex, g: Gate = DEFAULT_GATE, nowSecs = Dat
 }
 
 /**
- * Read BOTH tiers and require agreement. The reference oracle is an independently pushed second
+ * Read BOTH tiers and require agreement. The reference tier is an independently pushed second
  * opinion; requiring the two to agree turns a single wedged or compromised relay from a loss into
  * a rejection. It returns the PRIMARY mark, never an average: averaging hides the disagreement
  * that was the entire reason to read twice.
  */
 export async function readAgreedMark(id: Hex, g: Gate = DEFAULT_GATE) {
   const [p, r] = await Promise.all([
-    getFeed(config.contracts.oracle, id),
-    getFeed(config.contracts.refOracle, id),
+    getFeed(config.contracts.poolFactory, id, 1),
+    getFeed(config.contracts.poolFactory, id, 2),
   ]);
   const primary = gate(p, id, g);
   const reference = gate(r, id, g);
@@ -130,7 +133,7 @@ export interface Status {
 }
 
 export async function classify(symbol: string, nowSecs = Date.now() / 1000): Promise<Status> {
-  const f = await getFeed(config.contracts.oracle, feedId(symbol));
+  const f = await getFeed(config.contracts.poolFactory, feedId(symbol));
   const seen = observedAtSecs({
     sourceTsMs: Number(f.sourceTsMs),
     updatedAtSecs: Number(f.updatedAtSecs),
@@ -156,13 +159,12 @@ if (import.meta.main) {
   // whole number anywhere.
   const symbols = ['EURC', 'JPYC', 'NVDA', 'ASML', 'TSLA', 'WETH'];
   console.log(`${config.name} (chain ${config.chainId})`);
-  console.log(`primary   ${config.contracts.oracle}`);
-  console.log(`reference ${config.contracts.refOracle}\n`);
+  console.log(`oracle (PoolFactory) ${config.contracts.poolFactory}\n`);
 
   for (const s of symbols) {
     const st = await classify(s);
     const id = feedId(s);
-    const raw = await getFeed(config.contracts.oracle, id);
+    const raw = await getFeed(config.contracts.poolFactory, id);
     const head =
       `${s.padEnd(6)} ${st.verdict.padEnd(8)} ttl=${String(st.ttlSecs).padStart(4)}s` +
       ` age=${String(st.ageSecs).padStart(6)}s page=${st.page ? 'YES' : 'no '}`;
