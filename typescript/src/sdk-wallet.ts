@@ -10,7 +10,7 @@ import { createHttpProvider, privateKeyProvider, privateKeyToAddress, send as sd
 import { encodeFn } from '@btr-protocol/sdk/eth';
 import { ERC20_ABI } from '@btr-protocol/sdk/eth';
 import { readContract } from '@btr-protocol/sdk/eth';
-import { privateKey, rpcUrl, withRetry, type Address, type Hex } from './config.ts';
+import { config, privateKey, rpcUrl, withRetry, type Address, type Hex } from './config.ts';
 
 export const provider = createHttpProvider(rpcUrl);
 /** The signing wallet: answers `eth_accounts` and signs `eth_sendTransaction` locally. Every write
@@ -43,15 +43,14 @@ export async function send(calls: Call[]): Promise<unknown[]> {
     for (const c of calls) console.log(`  ${c.label.padEnd(16)} to=${c.to}\n    ${c.data}`);
     return [];
   }
-  const receipts: unknown[] = [];
-  for (const c of calls) {
-    // send() estimates, signs, broadcasts and waits; a mined revert throws TxRevertedError. No
-    // withRetry here: a timeout after the broadcast must not send the same call twice.
-    const [{ hash, receipt }] = await sdkSend(signer, [c], { label: c.label });
-    console.log(`  ${c.label.padEnd(16)} ${hash}`);
-    receipts.push(receipt);
-  }
-  return receipts;
+  // send() estimates, signs, broadcasts and waits per call, in order; a mined revert throws
+  // TxRevertedError before the next. No withRetry: a timeout after a broadcast must not resend.
+  const out = await sdkSend(signer, calls, {
+    expectedChainId: config.chainId,
+    label: calls.map((c) => c.label).join('+'),
+  });
+  out.forEach((r, i) => console.log(`  ${calls[i].label.padEnd(16)} ${r.hash}`));
+  return out.map((r) => r.receipt);
 }
 
 export const approve = (token: Address, spender: Address, amount: bigint): Call =>
