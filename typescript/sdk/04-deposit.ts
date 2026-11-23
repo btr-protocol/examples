@@ -17,7 +17,7 @@
  *
  * Run: bun run sdk/04-deposit.ts
  */
-import { POOL_ABI } from '@btr-protocol/sdk/abis';
+import { POOL_ABI } from '@btr-protocol/sdk/pool';
 import { readContract } from '@btr-protocol/sdk/eth';
 import { getCoverageRatio, getLPBalance } from '@btr-protocol/sdk/pool';
 import { demoLeg, feedId, fmt, need, config, unitsWorth, withRetry, type Address } from '../src/config.ts';

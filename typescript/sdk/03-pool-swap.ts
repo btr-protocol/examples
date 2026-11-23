@@ -14,7 +14,7 @@
  *       BTR_PRIVATE_KEY=0x.. BTR_RPC_URL=http://127.0.0.1:8545 bun run sdk/03-pool-swap.ts
  */
 import { getSwapQuote, type SwapQuote } from '@btr-protocol/sdk/pool';
-import { POOL_ABI } from '@btr-protocol/sdk/abis';
+import { POOL_ABI } from '@btr-protocol/sdk/pool';
 import { base, baseUnits, deadline, demoLeg, floorFrom, fmt, need, withRetry, type Address } from '../src/config.ts';
 import { account, approve, armed, balanceOf, call, provider, send } from '../src/sdk-wallet.ts';
 

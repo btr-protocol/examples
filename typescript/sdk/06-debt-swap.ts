@@ -29,7 +29,8 @@
  *
  * Run: bun run sdk/06-debt-swap.ts
  */
-import { LIABILITY_SWAP_ENABLED_BIT, POOL_ABI } from '@btr-protocol/sdk/abis';
+import { LIABILITY_SWAP_ENABLED_BIT } from '@btr-protocol/sdk/abis';
+import { POOL_ABI } from '@btr-protocol/sdk/pool';
 import { readContract } from '@btr-protocol/sdk/eth';
 import { liabilitySwapEnabled } from '@btr-protocol/sdk/pool';
 import { deadline, demoPair, fmt, need, withRetry, type Address } from '../src/config.ts';
